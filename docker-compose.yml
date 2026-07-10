@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hexbound}
+      POSTGRES_USER: ${POSTGRES_USER:-hexbound}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hexbound}
+    ports: ["${POSTGRES_PORT:-5433}:5432"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=$${POSTGRES_PASSWORD} psql -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB} -c 'SELECT 1' >/dev/null",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    volumes: ["hexbound-data:/var/lib/postgresql/data"]
+  backend:
+    build: ./backend
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-hexbound}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-hexbound}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-hexbound}
+    ports: ["${BACKEND_PORT:-8082}:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+  frontend:
+    build: ./frontend
+    ports: ["5173:80"]
+    depends_on: [backend]
+volumes:
+  hexbound-data:
