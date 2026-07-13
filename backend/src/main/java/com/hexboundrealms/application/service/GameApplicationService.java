@@ -178,19 +178,59 @@ public class GameApplicationService {
             .filter(x -> x.id.equals(playerId))
             .findFirst()
             .orElseThrow(() -> DomainException.of("INVALID_PLAYER", "Unknown player"));
-    List<String> buildTargets =
-        g.map.stream()
-            .filter(h -> building.outpostLegal(g, p, h.coordinate()))
-            .map(h -> h.coordinate().q() + "," + h.coordinate().r())
-            .toList();
+    boolean placementTurn = g.phase == GamePhase.STARTING_PLACEMENT
+        && placementPlayerId(g).map(playerId::equals).orElse(false);
+    List<String> buildTargets = g.map.stream()
+        .filter(h -> g.phase == GamePhase.STARTING_PLACEMENT
+            ? placementTurn && g.startingPlacementStep == StartingPlacementStep.OUTPOST
+                && startingOutpostLegal(g, h)
+            : building.outpostLegal(g, p, h.coordinate()))
+        .map(h -> h.coordinate().q() + "," + h.coordinate().r()).toList();
+    List<String> movementTargets = placementTurn && g.startingPlacementStep == StartingPlacementStep.ROAD
+        ? p.settlements.getFirst().location().neighbors().stream()
+            .filter(at -> g.map.stream().anyMatch(h -> h.coordinate().equals(at)))
+            .filter(at -> g.monsters.stream().noneMatch(m -> m.location().equals(at)))
+            .map(at -> at.q() + "," + at.r()).toList()
+        : List.of();
     List<String> actions =
-        g.phase == GamePhase.PLANNING
+        (g.phase == GamePhase.ACTION_CARD_SELECTION
+                || g.phase == GamePhase.PLANNING
+                || (g.phase == GamePhase.PLAYER_TURNS
+                    && currentTurnPlayerId(g).map(playerId::equals).orElse(false)))
             ? Arrays.stream(ActionType.values())
                 .filter(a -> a != p.previousAction)
                 .map(Enum::name)
                 .toList()
             : List.of();
-    return new LegalActions(actions, List.of(), buildTargets, List.of());
+    return new LegalActions(actions, movementTargets, buildTargets, List.of());
+  }
+
+  private Optional<UUID> currentTurnPlayerId(GameState g) {
+    if (g.phase != GamePhase.PLAYER_TURNS || g.players.isEmpty()) return Optional.empty();
+    if (!g.actionTurnOrder.isEmpty() && g.actionTurnOrderIndex < g.actionTurnOrder.size()) {
+      return Optional.of(g.actionTurnOrder.get(g.actionTurnOrderIndex));
+    }
+    return Optional.of(g.players.get(g.currentTurnIndex).id);
+  }
+
+  private Optional<UUID> placementPlayerId(GameState g) {
+    if (g.order.initialTurnOrder().isEmpty() || g.startingPlacementStep == StartingPlacementStep.COMPLETE)
+      return Optional.empty();
+    int index = g.startingPlacementStep == StartingPlacementStep.ROAD
+        ? g.order.initialTurnOrder().size() - 1 - g.currentStartingPlacementIndex
+        : g.currentStartingPlacementIndex;
+    return Optional.of(g.order.initialTurnOrder().get(index));
+  }
+
+  private boolean startingOutpostLegal(GameState g, com.hexboundrealms.domain.map.MapHex h) {
+    boolean buildable = switch (h.terrain()) {
+      case FOREST, FIELD, MOUNTAIN, QUARRY, TRADE_LAND -> true;
+      default -> false;
+    };
+    return buildable
+        && g.monsters.stream().noneMatch(m -> m.location().equals(h.coordinate()))
+        && g.players.stream().flatMap(x -> x.settlements.stream())
+            .allMatch(s -> s.location().distanceTo(h.coordinate()) >= 2);
   }
 
   public List<Card> cards() {
@@ -209,7 +249,9 @@ public class GameApplicationService {
     UUID current =
         g.phase == GamePhase.HERO_DRAFT && g.currentHeroDraftIndex < g.order.heroDraftOrder().size()
             ? g.order.heroDraftOrder().get(g.currentHeroDraftIndex)
-            : null;
+            : g.phase == GamePhase.HERO_SELECTION
+                ? g.players.stream().filter(player -> !player.heroConfirmed).map(player -> player.id).findFirst().orElse(null)
+                : null;
     return new HeroDraftView(
         g.phase,
         g.order.initialTurnOrder(),
@@ -223,27 +265,39 @@ public class GameApplicationService {
   private GameCommand toCommand(CommandEnvelope e) {
     JsonNode p = e.payload() == null ? json.createObjectNode() : e.payload();
     return switch (e.type()) {
-      case "ROLL_WORLD" ->
+      case "ROLL_WORLD", "ROLL_WORLD_DICE" ->
           new GameCommand.RollWorld(p.has("forced") ? p.get("forced").asInt() : null);
-      case "BUY_MARKET_CARD" -> new GameCommand.BuyMarketCard(UUID.fromString(text(p, "cardId")));
+      case "BUY_MARKET_CARD", "BUY_BONUS_CARD" -> new GameCommand.BuyMarketCard(UUID.fromString(text(p, "cardId")));
       case "SELECT_HERO" -> new GameCommand.SelectHero(HeroClass.valueOf(text(p, "heroClass")));
       case "CONFIRM_HERO" -> new GameCommand.ConfirmHero();
       case "CANCEL_HERO_SELECTION" -> new GameCommand.CancelHeroSelection();
       case "START_STARTING_PLACEMENT" -> new GameCommand.StartStartingPlacement();
+      case "PLACE_STARTING_OUTPOST" -> new GameCommand.PlaceStartingOutpost(coord(p, "at"));
+      case "PLACE_STARTING_ROAD" -> new GameCommand.PlaceStartingRoad(coord(p, "to"));
       case "PROPOSE_HERO_SWAP" ->
           new GameCommand.ProposeHeroSwap(UUID.fromString(text(p, "targetPlayerId")));
       case "ACCEPT_HERO_SWAP" ->
           new GameCommand.AcceptHeroSwap(UUID.fromString(text(p, "proposalId")));
-      case "SELECT_ACTION" -> new GameCommand.SelectAction(ActionType.valueOf(text(p, "action")));
+      case "SELECT_ACTION", "SELECT_ACTION_CARD" -> new GameCommand.SelectAction(ActionType.valueOf(text(p, "action")));
       case "BUILD_ROAD" -> new GameCommand.BuildRoad(coord(p, "from"), coord(p, "to"));
       case "BUILD_OUTPOST" -> new GameCommand.BuildOutpost(coord(p, "at"));
       case "RECRUIT" -> new GameCommand.Recruit(UnitType.valueOf(text(p, "unitType")));
       case "TRADE_RESOURCE" ->
           new GameCommand.Trade(
               ResourceType.valueOf(text(p, "give")), ResourceType.valueOf(text(p, "receive")));
-      case "EXPLORE" -> new GameCommand.Explore(coord(p, "target"));
+      case "BANK_TRADE" ->
+          new GameCommand.BankTrade(
+              ResourceType.valueOf(text(p, "give")), ResourceType.valueOf(text(p, "receive")));
+      case "PROPOSE_TRADE" -> new GameCommand.ProposeTrade(
+          UUID.fromString(text(p, "targetPlayerId")), resources(p, "offeredResources"),
+          resources(p, "requestedResources"), p.path("offeredGold").asInt(0),
+          p.path("requestedGold").asInt(0));
+      case "ACCEPT_TRADE" -> new GameCommand.AcceptTrade(UUID.fromString(text(p, "proposalId")));
+      case "REJECT_TRADE" -> new GameCommand.RejectTrade(UUID.fromString(text(p, "proposalId")));
+      case "CANCEL_TRADE" -> new GameCommand.CancelTrade(UUID.fromString(text(p, "proposalId")));
+      case "EXPLORE", "EXPLORE_HEX" -> new GameCommand.Explore(coord(p, "target"));
       case "MOVE_HERO" -> new GameCommand.MoveHero(coord(p, "to"));
-      case "ATTACK" ->
+      case "ATTACK", "START_ATTACK" ->
           new GameCommand.Attack(
               coord(p, "target"),
               p.hasNonNull("reaction") ? ReactionType.valueOf(text(p, "reaction")) : null);
@@ -260,7 +314,7 @@ public class GameApplicationService {
                   : Optional.empty());
       case "RESOLVE_ATTACK_BATCH" -> new GameCommand.ResolveAttackBatch();
       case "FORTIFY" -> new GameCommand.Fortify();
-      case "RESOLVE_ACTION" -> new GameCommand.ResolveAction();
+      case "RESOLVE_ACTION", "REVEAL_ACTION_CARDS", "END_PLAYER_TURN" -> new GameCommand.ResolveAction();
       case "END_ROUND" -> new GameCommand.EndRound();
       case "DEBUG" ->
           new GameCommand.Debug(
@@ -273,6 +327,16 @@ public class GameApplicationService {
     JsonNode n = p.get(key);
     if (n == null) throw DomainException.of("INVALID_PAYLOAD", "Missing " + key);
     return new HexCoordinate(n.get("q").asInt(), n.get("r").asInt());
+  }
+
+  private Resources resources(JsonNode p, String key) {
+    JsonNode value = p.path(key);
+    try {
+      return new Resources(value.path("wood").asInt(0), value.path("food").asInt(0),
+          value.path("ore").asInt(0), value.path("stone").asInt(0), value.path("gold").asInt(0));
+    } catch (IllegalArgumentException ex) {
+      throw DomainException.of("INVALID_PAYLOAD", key + " cannot contain negative values");
+    }
   }
 
   private String text(JsonNode p, String key) {

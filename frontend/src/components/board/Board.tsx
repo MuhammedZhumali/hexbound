@@ -6,15 +6,15 @@ const RADIUS = 48;
 const HEIGHT = Math.sqrt(3) * RADIUS;
 
 const terrainColors: Record<string, string> = {
-  FOREST: '#52745a',
-  FIELD: '#aaa45d',
-  MOUNTAIN: '#7b8086',
-  QUARRY: '#a08061',
-  TRADE_LAND: '#9b804b',
-  VILLAGE: '#98705a',
-  RUIN: '#75678a',
-  MONSTER_LAIR: '#70434d',
-  ANCIENT_CAPITAL: '#bd9145',
+  FOREST: '#4f7f5f',
+  FIELD: '#b6a84c',
+  MOUNTAIN: '#747b83',
+  QUARRY: '#8f795f',
+  TRADE_LAND: '#b0833d',
+  VILLAGE: '#9c715c',
+  RUIN: '#746491',
+  MONSTER_LAIR: '#673947',
+  ANCIENT_CAPITAL: '#c4943f',
 };
 
 const terrainNames: Record<string, string> = {
@@ -60,7 +60,15 @@ const polygonPoints = (x: number, y: number) =>
     return `${x + RADIUS * Math.cos(angle)},${y + RADIUS * Math.sin(angle)}`;
   }).join(' ');
 
-export function Board({ game, legal = [] }: { game: Game; legal?: string[] }) {
+export function Board({
+  game,
+  legal = [],
+  explainInvalid,
+}: {
+  game: Game;
+  legal?: string[];
+  explainInvalid?: (hex: Hex) => void;
+}) {
   const { selected, select, zoom, pan, setZoom, setPan } = useUi();
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | undefined>(undefined);
   const [tooltip, setTooltip] = useState<Hex>();
@@ -122,7 +130,13 @@ export function Board({ game, legal = [] }: { game: Game; legal?: string[] }) {
               hex={hex}
               selected={selected?.q === hex.coordinate.q && selected.r === hex.coordinate.r}
               legal={legal.includes(`${hex.coordinate.q},${hex.coordinate.r}`)}
-              onSelect={() => select(hex.coordinate)}
+              showInvalid={legal.length > 0}
+              onSelect={() => {
+                if (legal.length > 0 && !legal.includes(`${hex.coordinate.q},${hex.coordinate.r}`)) {
+                  explainInvalid?.(hex);
+                }
+                select(hex.coordinate);
+              }}
               onTooltip={setTooltip}
             />
           ))}
@@ -209,6 +223,13 @@ export function Board({ game, legal = [] }: { game: Game; legal?: string[] }) {
               {tooltip.productionNumber}
             </span>
           )}
+          {tooltip.productionNumber && (
+            <span>
+              Number {tooltip.productionNumber} appears {rollProbability(tooltip.productionNumber)}/36 on
+              2d6.
+            </span>
+          )}
+          <span>{explorationHint(tooltip.terrain)}</span>
           {tooltip.villageLoyalty != null && <span>Лояльность: {tooltip.villageLoyalty}</span>}
         </div>
       )}
@@ -220,12 +241,14 @@ function HexTile({
   hex,
   selected,
   legal,
+  showInvalid,
   onSelect,
   onTooltip,
 }: {
   hex: Hex;
   selected: boolean;
   legal: boolean;
+  showInvalid: boolean;
   onSelect: () => void;
   onTooltip: (hex?: Hex) => void;
 }) {
@@ -245,17 +268,26 @@ function HexTile({
         points={polygonPoints(position.x, position.y)}
         fill={terrainColors[hex.terrain] ?? '#777'}
         stroke={selected ? '#fff2a9' : legal ? 'url(#legal)' : '#425047'}
-        strokeWidth={selected || legal ? 5 : 2}
+        strokeWidth={selected || legal ? 5 : showInvalid ? 2.5 : 2}
         filter="url(#shadow)"
       />
+      {showInvalid && !legal && (
+        <g transform={`translate(${position.x + 23} ${position.y - 28})`} className="hex-lock">
+          <circle r="11" />
+          <text y="4">!</text>
+        </g>
+      )}
       <text x={position.x} y={position.y - 15}>
         {terrainIcons[hex.terrain] ?? ''}
       </text>
       {hex.productionNumber && (
-        <g>
-          <circle cx={position.x} cy={position.y + 11} r="14" fill="#f2e3bc" />
+        <g className={hex.productionNumber === 6 || hex.productionNumber === 8 ? 'hot-token' : ''}>
+          <circle cx={position.x} cy={position.y + 11} r="17" fill="#f2e3bc" />
           <text x={position.x} y={position.y + 16} className="number">
             {hex.productionNumber}
+          </text>
+          <text x={position.x} y={position.y + 29} className="probability">
+            {rollProbability(hex.productionNumber)}/36
           </text>
         </g>
       )}
@@ -264,4 +296,23 @@ function HexTile({
       </title>
     </g>
   );
+}
+
+function rollProbability(number: number) {
+  return Math.max(0, 6 - Math.abs(7 - number));
+}
+
+function explorationHint(terrain: string) {
+  const hints: Record<string, string> = {
+    FOREST: 'Explore Forest: hidden trail, rare wood, beast sign, or shrine clue.',
+    FIELD: 'Explore Field: local paths, food cache, rumor, or empty wilderness.',
+    MOUNTAIN: 'Explore Mountain: ore vein, pass, hazard, or lair clue.',
+    QUARRY: 'Explore Quarry: stone cache, old tunnel, tool marks, or hazard.',
+    TRADE_LAND: 'Explore Trade Land: route, market contact, toll, or rumor.',
+    VILLAGE: 'Explore Neutral Village: quest, alliance need, hidden problem, or unrest.',
+    RUIN: 'Explore Ancient Ruin: relic, trap, lore, or seal progress.',
+    MONSTER_LAIR: 'Explore Monster Lair: strength, weakness, reward clue, or spawn timer.',
+    ANCIENT_CAPITAL: 'Explore Capital: major lore, seal clue, or strategic warning.',
+  };
+  return hints[terrain] ?? 'Explore Wilderness: trail, cache, encounter, or nothing obvious.';
 }

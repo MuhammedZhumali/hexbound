@@ -21,7 +21,7 @@ it('selects an action card locally and sends it only after confirmation', () => 
     <PhaseControls
       game={game}
       view={view}
-      legalActions={['FORTIFY', 'TRADE', 'RECRUIT', 'BUILD', 'EXPLORE']}
+      legalActions={['EXPLORE', 'TRADE', 'BUILD', 'RECRUIT', 'FORTIFY']}
       legalBuildTargets={[]}
       send={send}
       busy={false}
@@ -31,9 +31,9 @@ it('selects an action card locally and sends it only after confirmation', () => 
     />,
   );
 
-  fireEvent.click(screen.getByRole('button', { name: /Укрепиться/ }));
+  fireEvent.click(screen.getByRole('button', { name: /Fortify/ }));
   expect(send).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Подтвердить тайное действие' }));
   expect(send).toHaveBeenCalledWith('SELECT_ACTION', { action: 'FORTIFY' });
-  expect(screen.getByRole('button', { name: /Атаковать/ })).toBeDisabled();
+  expect(screen.getByRole('button', { name: /Attack/ })).toBeDisabled();
 });

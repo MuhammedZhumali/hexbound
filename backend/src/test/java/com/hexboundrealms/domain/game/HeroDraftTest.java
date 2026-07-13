@@ -18,20 +18,18 @@ class HeroDraftTest {
     assertThat(game.players).allMatch(player -> player.hero == null);
     assertThat(game.order.heroDraftOrder())
         .containsExactlyElementsOf(game.order.initialTurnOrder().reversed());
-    assertThat(game.phase).isEqualTo(GamePhase.HERO_DRAFT);
+    assertThat(game.phase).isEqualTo(GamePhase.HERO_SELECTION);
   }
 
   @Test
-  void onlyCurrentPlayerMaySelectAndTemporaryChoiceMayChange() {
+  void heroSelectionIsSimultaneousAndTemporaryChoiceMayChange() {
     GameState game = startedDraft(false);
     PlayerState current = player(game, game.order.heroDraftOrder().getFirst());
     PlayerState other =
         game.players.stream().filter(player -> player != current).findFirst().orElseThrow();
 
-    assertThatThrownBy(
-            () -> engine.execute(game, other.id, new GameCommand.SelectHero(HeroClass.MAGE)))
-        .isInstanceOf(DomainException.class)
-        .hasMessageContaining("Another player");
+    assertThatCode(() -> engine.execute(game, other.id, new GameCommand.SelectHero(HeroClass.MAGE)))
+        .doesNotThrowAnyException();
 
     engine.execute(game, current.id, new GameCommand.SelectHero(HeroClass.KNIGHT));
     engine.execute(game, current.id, new GameCommand.SelectHero(HeroClass.ENGINEER));
@@ -77,11 +75,16 @@ class HeroDraftTest {
       engine.execute(game, player.id, new GameCommand.SelectHero(heroes[i]));
       engine.execute(game, player.id, new GameCommand.ConfirmHero());
     }
-    assertThat(game.phase).isEqualTo(GamePhase.STARTING_PLACEMENT);
+    assertThat(game.phase).isEqualTo(GamePhase.HERO_REVEAL);
 
     engine.execute(game, game.players.getFirst().id, new GameCommand.StartStartingPlacement());
 
-    assertThat(game.phase).isEqualTo(GamePhase.WORLD);
+    assertThat(game.phase).isEqualTo(GamePhase.STARTING_PLACEMENT);
+    assertThat(game.players).allSatisfy(player -> assertThat(player.settlements).isEmpty());
+
+    completeManualPlacement(game);
+
+    assertThat(game.phase).isEqualTo(GamePhase.WORLD_ROLL);
     assertThat(game.players)
         .allSatisfy(
             player -> {
@@ -149,5 +152,43 @@ class HeroDraftTest {
 
   private PlayerState player(GameState game, UUID id) {
     return game.players.stream().filter(player -> player.id.equals(id)).findFirst().orElseThrow();
+  }
+
+  private void completeManualPlacement(GameState game) {
+    while (game.startingPlacementStep == StartingPlacementStep.OUTPOST) {
+      PlayerState current = player(game, placementPlayerId(game));
+      boolean placed = false;
+      for (var hex : game.map) {
+        try {
+          engine.execute(game, current.id, new GameCommand.PlaceStartingOutpost(hex.coordinate()));
+          placed = true;
+          break;
+        } catch (DomainException ignored) {
+          // Try the next server-validated target.
+        }
+      }
+      assertThat(placed).isTrue();
+    }
+    while (game.startingPlacementStep == StartingPlacementStep.ROAD) {
+      PlayerState current = player(game, placementPlayerId(game));
+      boolean placed = false;
+      for (var target : current.settlements.getFirst().location().neighbors()) {
+        try {
+          engine.execute(game, current.id, new GameCommand.PlaceStartingRoad(target));
+          placed = true;
+          break;
+        } catch (DomainException ignored) {
+          // Try the next adjacent target.
+        }
+      }
+      assertThat(placed).isTrue();
+    }
+  }
+
+  private UUID placementPlayerId(GameState game) {
+    int index = game.startingPlacementStep == StartingPlacementStep.ROAD
+        ? game.players.size() - 1 - game.currentStartingPlacementIndex
+        : game.currentStartingPlacementIndex;
+    return game.order.initialTurnOrder().get(index);
   }
 }

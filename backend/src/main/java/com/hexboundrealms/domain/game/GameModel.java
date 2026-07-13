@@ -14,10 +14,19 @@ public final class GameModel {
 
   public enum GamePhase {
     SETUP,
+    HERO_SELECTION,
+    HERO_REVEAL,
     HERO_DRAFT,
     STARTING_PLACEMENT,
+    WORLD_ROLL,
+    PRODUCTION,
     WORLD,
     MONSTER_EVENT,
+    NEGOTIATION,
+    TRADE_NEGOTIATION,
+    ACTION_CARD_SELECTION,
+    ACTION_CARD_REVEAL,
+    PLAYER_TURNS,
     MARKET,
     PLANNING,
     REVEAL,
@@ -44,12 +53,41 @@ public final class GameModel {
   }
 
   public enum ActionType {
-    FORTIFY,
-    TRADE,
-    RECRUIT,
-    BUILD,
     EXPLORE,
+    TRADE,
+    BUILD,
+    RECRUIT,
+    FORTIFY,
     ATTACK
+  }
+
+  public record TurnActionPoints(UUID playerId, int remainingActionPoints) {}
+
+  public enum StartingPlacementStep {
+    OUTPOST,
+    ROAD,
+    COMPLETE
+  }
+
+  public enum TradeStatus {
+    PENDING,
+    ACCEPTED,
+    REJECTED,
+    CANCELLED,
+    EXPIRED
+  }
+
+  public enum ExplorationResultType {
+    BONUS_RESOURCE,
+    HIDDEN_ROUTE,
+    LOCAL_QUEST,
+    MONSTER_CLUE,
+    AMBUSH,
+    ARTIFACT_CLUE,
+    VILLAGE_SECRET,
+    TRADE_CONTACT,
+    TEMPORARY_BUFF,
+    NOTHING_FOUND
   }
 
   public enum SettlementLevel {
@@ -96,6 +134,15 @@ public final class GameModel {
   }
 
   public record Resources(int wood, int food, int ore, int stone, int gold) {
+    public Resources {
+      if (wood < 0 || food < 0 || ore < 0 || stone < 0 || gold < 0)
+        throw new IllegalArgumentException("Resources cannot be negative");
+    }
+
+    public static Resources none() {
+      return new Resources(0, 0, 0, 0, 0);
+    }
+
     public static Resources starting() {
       return new Resources(1, 1, 0, 1, 1);
     }
@@ -119,7 +166,43 @@ public final class GameModel {
       return new Resources(
           wood - c.wood, food - c.food, ore - c.ore, stone - c.stone, gold - c.gold);
     }
+
+    public Resources plus(Resources other) {
+      return new Resources(
+          wood + other.wood, food + other.food, ore + other.ore, stone + other.stone,
+          gold + other.gold);
+    }
   }
+
+  public record TradeProposal(
+      UUID proposalId,
+      UUID proposerPlayerId,
+      UUID targetPlayerId,
+      Resources offeredResources,
+      Resources requestedResources,
+      int offeredGold,
+      int requestedGold,
+      TradeStatus status) {
+    public TradeProposal {
+      Objects.requireNonNull(proposalId);
+      Objects.requireNonNull(proposerPlayerId);
+      Objects.requireNonNull(targetPlayerId);
+      Objects.requireNonNull(offeredResources);
+      Objects.requireNonNull(requestedResources);
+      Objects.requireNonNull(status);
+      if (proposerPlayerId.equals(targetPlayerId)) throw new IllegalArgumentException("Self trade");
+      if (offeredGold < 0 || requestedGold < 0) throw new IllegalArgumentException("Negative gold");
+    }
+
+    public TradeProposal withStatus(TradeStatus next) {
+      return new TradeProposal(
+          proposalId, proposerPlayerId, targetPlayerId, offeredResources, requestedResources,
+          offeredGold, requestedGold, next);
+    }
+  }
+
+  public record ExplorationResult(
+      UUID playerId, HexCoordinate target, ExplorationResultType type, String description) {}
 
   public record GloryState(
       int construction, int monsters, int quests, int diplomacy, int battles, int artifacts) {
@@ -231,11 +314,19 @@ public final class GameModel {
     public List<UnitState> units = new ArrayList<>();
     public List<Card> hand = new ArrayList<>();
     public Set<HexCoordinate> exploredRuins = new HashSet<>();
+    public Set<HexCoordinate> exploredHexes = new HashSet<>();
     public SealProgress sealProgress = SealProgress.empty();
     public ActionType selectedAction;
     public ActionType previousAction;
     public boolean actionLocked;
     public int fortificationTokens;
+    public int basicActionPoints = 3;
+    public boolean mainActionCompletedThisRound;
+    public boolean freeExploreUsed;
+    public boolean freeTradeCardBuyUsed;
+    public boolean freeRoadUsed;
+    public boolean freeMilitiaUsed;
+    public boolean attackDiscountUsed;
     public com.hexboundrealms.domain.combat.AttackPlan attackPlan;
 
     public PlayerState() {}
@@ -268,7 +359,15 @@ public final class GameModel {
     public HeroDraftSettings heroDraftSettings = HeroDraftSettings.defaults();
     public GameOrder order = GameOrder.empty();
     public int currentHeroDraftIndex = 0;
+    public StartingPlacementStep startingPlacementStep = StartingPlacementStep.OUTPOST;
+    public int currentStartingPlacementIndex = 0;
+    public int currentTurnIndex = 0;
+    public List<UUID> actionTurnOrder = new ArrayList<>();
+    public int actionTurnOrderIndex = 0;
+    public boolean hybridTurnMode;
     public List<HeroSwapProposal> heroSwapProposals = new ArrayList<>();
+    public List<TradeProposal> tradeProposals = new ArrayList<>();
+    public List<ExplorationResult> explorationResults = new ArrayList<>();
     public Integer lastRoll;
     public Integer forced2d6;
     public Integer forcedD20;

@@ -1,5 +1,40 @@
 import { useEffect } from 'react';
 
+const sections = [
+  ['Goal of the Game', 'Reach 10 Glory. The top bar keeps the closest progress visible.'],
+  ['Round Structure', 'Roll production, resolve a monster on 7, negotiate, choose secret action cards, reveal, take 3 AP player turns, then end the round.'],
+  ['Resources', 'Wood and Stone build roads. Food recruits. Ore supports infantry and fortify. Gold buys cards and flexible help.'],
+  ['Starting Placement', 'Place Outposts manually in turn order, then Roads in reverse order. Valid hexes are highlighted.'],
+  ['Trading', 'Player trades exchange resources and gold during negotiation. Bank trade is available during AP turns.'],
+  ['Building', 'Build Roads to expand your network. Outposts and upgrades are confirmed by backend rules.'],
+  ['Exploration', 'Explore can target many terrain types. The backend chooses the final result after you commit.'],
+  ['Heroes', 'Hero class gives abilities, but player color and name identify the owner when classes repeat.'],
+  ['Armies and Combat', 'Combat rolls d20 plus bonuses against defense. Fatigue, garrison, walls, and reactions matter.'],
+  ['Monsters', 'A roll of 7 skips production and can spawn a monster that blocks nearby production.'],
+  ['Villages and Reputation', 'Villages can create quests, alliances, or risks. Reputation affects some hero paths.'],
+  ['Action Cards', 'Each round, choose one secret card. It sets initiative and gives a bonus; every player still gets 3 AP.'],
+  ['Glory', 'Glory is the score track. First to 10 Glory wins after end-round cleanup.'],
+  ['Common Beginner Tips', 'Secure mixed resources, trade before using the bank, and do not attack while exhausted.'],
+];
+
+const glossary = [
+  'Outpost',
+  'Town',
+  'City',
+  'Road',
+  'Garrison',
+  'Reserve',
+  'Fatigue',
+  'Exhausted',
+  'Grace',
+  'Mana',
+  'Glory',
+  'Action Card',
+  'Loyalty',
+  'Monster Event',
+  'Fortification Token',
+];
+
 export function RulesModal({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
@@ -18,109 +53,33 @@ export function RulesModal({ onClose }: { onClose: () => void }) {
       >
         <header>
           <div>
-            <p className="eyebrow">Краткая памятка</p>
-            <h2 id="rules-title">Как играть в Hexbound Realms</h2>
+            <p className="eyebrow">Rulebook</p>
+            <h2 id="rules-title">Hexbound Realms Rulebook</h2>
           </div>
-          <button className="icon-button" onClick={onClose} aria-label="Закрыть правила">
-            ×
+          <button className="icon-button" onClick={onClose} aria-label="Close rulebook">
+            x
           </button>
         </header>
 
-        <div className="rules-grid">
-          <article>
-            <b>0. Драфт героев</b>
-            <p>
-              Порядок хода определяется seed, а герои выбираются в обратном порядке. Один и тот же
-              класс могут выбрать несколько игроков.
-            </p>
-          </article>
-          <article>
-            <b>1. Мир</b>
-            <p>Первый игрок бросает 2d6. Поселения на совпавших землях получают ресурсы.</p>
-          </article>
-          <article>
-            <b>2. Семёрка</b>
-            <p>При результате 7 производство отменяется и рядом с владениями появляется монстр.</p>
-          </article>
-          <article>
-            <b>3. Планирование</b>
-            <p>Каждый тайно выбирает одну карту. Нельзя повторять действие прошлого раунда.</p>
-          </article>
-          <article>
-            <b>4. Порядок действий</b>
-            <p>Укрепление → Торговля → Найм → Строительство → Исследование → Атака.</p>
-          </article>
-          <article>
-            <b>5. Бой</b>
-            <p>
-              Все атакующие сначала тайно фиксируют источник, цель и участников. Затем планы
-              раскрываются вместе, а backend рассчитывает единый пакет боёв на d20.
-            </p>
-          </article>
-          <article>
-            <b>6. Конфликты атак</b>
-            <p>
-              Встречные армии проводят полевое столкновение; цепочки и несколько атак на одну цель
-              не отменяют уже зафиксированные планы.
-            </p>
-          </article>
-          <article>
-            <b>7. Победа</b>
-            <p>Наберите 12 Славы и удерживайте минимум 3 активные Печати пути.</p>
-          </article>
-        </div>
-
         <div className="rules-grid deep">
-          <article>
-            <b>Герои</b>
-            <p>
-              Рыцарь: +2 к атаке, +1 к защите; слабость — дорогие большие армии. Торговец: соседнее
-              производство, рука 6 карт, резерв рынка; слабость — -1 в личном бою. Жрец: лечение,
-              благословение, святилище, воскрешение; слабость — зависит от благодати и репутации.
-            </p>
-          </article>
-          <article>
-            <b>Герои, продолжение</b>
-            <p>
-              Следопыт: ход 2, +2 к руинам и монстрам дикой местности; слабость — лимит армейского
-              бонуса. Маг: болт, защита, телепорт, трансмутация, контрзаклинание; слабость — без
-              маны почти не усиливает бой. Инженер: дешевле дороги/здания, больше укреплений,
-              прочные стены; слабость — нет бонуса атаки героя.
-            </p>
-          </article>
-          <article>
-            <b>Карты рынка</b>
-            <p>
-              Tactic усиливает заявленный бросок. Reaction раскрывается при защите. Ally даёт
-              временную помощь. Upgrade улучшает поселение или армию. Quest даёт цель для Славы без
-              прямой покупки очков.
-            </p>
-          </article>
-          <article>
-            <b>Ресурсы</b>
-            <p>
-              Дерево и камень нужны для дорог и аванпостов. Еда кормит найм. Руда нужна пехоте и
-              укреплению. Золото покупает рынок, кавалерию и наёмников. Репутация и Слава двигают
-              победные условия.
-            </p>
-          </article>
-          <article>
-            <b>Исследование</b>
-            <p>
-              Исследование — это не открытие всей карты, а вылазка героя в древние руины. Сейчас
-              руины дают золото, репутацию и прогресс Печати пути; обычные земли уже известны и
-              используются через дороги, поселения и производство.
-            </p>
-          </article>
+          {sections.map(([title, text], index) => (
+            <article key={title}>
+              <b>
+                {index + 1}. {title}
+              </b>
+              <p>{text}</p>
+            </article>
+          ))}
         </div>
 
-        <div className="rules-notes">
-          <b>Цвета подсветки карты</b>
-          <span>Зелёный — движение</span>
-          <span>Синий — строительство</span>
-          <span>Красный — атака</span>
-          <span>Фиолетовый — исследование</span>
-        </div>
+        <section className="glossary-block">
+          <p className="eyebrow">Glossary</p>
+          <div className="glossary-chips">
+            {glossary.map((term) => (
+              <span key={term}>{term}</span>
+            ))}
+          </div>
+        </section>
       </section>
     </div>
   );

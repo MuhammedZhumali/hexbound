@@ -2,7 +2,18 @@
 
 :root {
   font-family: Inter, system-ui, sans-serif;
-  color: #26332f;
+  --color-bg: #101418;
+  --color-panel: #ffffff;
+  --color-panel-2: #f4f7f5;
+  --color-border: #d6e0da;
+  --color-text: #26332f;
+  --color-muted: #718079;
+  --color-accent: #b77938;
+  --color-danger: #a64e53;
+  --color-success: #39795c;
+  --radius-card: 8px;
+  --shadow-panel: 0 8px 28px rgba(31, 52, 41, 0.16);
+  color: var(--color-text);
   background: #edf2ee;
   font-synthesis: none;
 }
@@ -315,6 +326,55 @@ select {
   color: #bd4e56;
 }
 
+.phase-badge,
+.victory-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0.35rem 0.6rem;
+  background: #edf6f0;
+  border: 1px solid #cce3d4;
+  border-radius: 999px;
+  color: #2f684d;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.phase-monster_event,
+.phase-final_round {
+  color: #8a3d43;
+  background: #fff0f1;
+  border-color: #f1c5c8;
+}
+
+.phase-starting_placement,
+.phase-trade_negotiation,
+.phase-player_turns {
+  color: #85622e;
+  background: #fff6e7;
+  border-color: #ead8b8;
+}
+
+.victory-pill {
+  color: #7b5520;
+  background: #fff8eb;
+  border-color: #ead8b8;
+  text-transform: none;
+}
+
+.guidance-select {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #65756d;
+  font-weight: 800;
+}
+
+.guidance-select select {
+  min-height: 34px;
+  padding: 0.35rem 0.5rem;
+}
+
 .panel {
   padding: 1.1rem;
   background: #fff;
@@ -340,6 +400,112 @@ select {
   font: 700 0.68rem Inter;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+.guide-card,
+.recommendation-card,
+.hero-summary-card {
+  margin-top: 0.8rem;
+  padding: 0.75rem;
+  background: var(--color-panel-2);
+  border: 1px solid #e0e8e3;
+  border-radius: var(--radius-card);
+}
+
+.guide-card h3,
+.recommendation-card h3 {
+  margin: 0 0 0.35rem;
+  color: #2f4a3e;
+  font: 800 0.82rem Inter;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.guide-card p,
+.recommendation-card p {
+  margin: 0;
+  color: #5d6c65;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.guide-card ul {
+  margin: 0.45rem 0 0;
+  padding-left: 1rem;
+  color: #65746d;
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+.recommendation-card {
+  color: #75541e;
+  background: #fff8eb;
+  border-color: #ead8b8;
+}
+
+.inline-warning {
+  margin-top: 0.55rem;
+  padding: 0.5rem;
+  color: #8f3038;
+  background: #fff0f1;
+  border: 1px solid #f1c5c8;
+  border-radius: 7px;
+  font-size: 0.68rem;
+}
+
+.action-checklist {
+  display: grid;
+  gap: 0.32rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.action-checklist li {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  gap: 0.4rem;
+  color: #65746d;
+  font-size: 0.68rem;
+}
+
+.action-checklist span {
+  padding: 0.12rem 0.25rem;
+  border-radius: 5px;
+  background: #e7ece9;
+  color: #59675f;
+  font-size: 0.52rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.action-checklist .current span {
+  color: #2f684d;
+  background: #dff0e6;
+}
+
+.action-checklist .done {
+  color: #2f684d;
+}
+
+.log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.log-filters button {
+  min-height: 26px;
+  padding: 0.2rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.56rem;
+}
+
+.log-filters button.active {
+  color: #fff;
+  background: #39795c;
+  border-color: #39795c;
 }
 
 .phase {
@@ -624,6 +790,28 @@ select {
   font: 700 12px Inter;
 }
 
+.hex .probability {
+  fill: #675a43;
+  font: 700 6px Inter;
+}
+
+.hot-token circle {
+  stroke: #b55337;
+  stroke-width: 3px;
+}
+
+.hex-lock circle {
+  fill: rgba(32, 42, 38, 0.72);
+  stroke: #fff8e9;
+  stroke-width: 1.5px;
+}
+
+.hex-lock text {
+  fill: #fff8e9;
+  font: 900 12px Inter;
+  text-anchor: middle;
+}
+
 .road {
   paint-order: stroke;
   stroke: #fff;
@@ -734,6 +922,33 @@ select {
   color: #849089;
   font-size: 0.48rem;
   overflow: hidden;
+}
+
+.resources span.needed-resource {
+  background: #fff7e8;
+  border-color: #e7c98f;
+}
+
+.resources span em {
+  color: #9a642b;
+  font-size: 0.46rem;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.hero-summary-card {
+  display: grid;
+  gap: 0.22rem;
+  margin-bottom: 0.65rem;
+}
+
+.hero-summary-card b {
+  color: #315042;
+}
+
+.hero-summary-card span {
+  color: #6d7a74;
+  font-size: 0.68rem;
 }
 
 dl {
@@ -1087,6 +1302,63 @@ dd {
   box-shadow: 0 0 0 2px rgba(79, 145, 110, 0.16);
 }
 
+.context-action {
+  display: grid;
+  min-height: 120px;
+  grid-template-columns: 32px 1fr;
+  align-items: start;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  text-align: left;
+}
+
+.context-action.selected {
+  background: #e9f5ed;
+  border-color: #4f916e;
+  box-shadow: 0 0 0 2px rgba(79, 145, 110, 0.16);
+}
+
+.context-action-icon {
+  color: #4d8067;
+  font-size: 1.35rem;
+  line-height: 1;
+  text-align: center;
+}
+
+.context-action-copy {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.context-action-copy b {
+  font-size: 0.74rem;
+}
+
+.context-action-copy small,
+.context-action-copy em,
+.context-action-copy i,
+.context-action-copy strong {
+  color: #748079;
+  font-size: 0.58rem;
+  font-style: normal;
+  line-height: 1.3;
+}
+
+.context-action-copy em {
+  color: #8b6832;
+}
+
+.context-action-copy i {
+  color: #39795c;
+  font-weight: 800;
+}
+
+.context-action-copy strong {
+  color: #9a3f46;
+  font-weight: 800;
+}
+
 .planning-confirm {
   display: flex;
   align-items: center;
@@ -1169,6 +1441,133 @@ dd {
   background: #f6f1e8;
   border: 1px solid #e3d8c7;
   border-radius: 8px;
+}
+
+.combat-preview,
+.monster-callout,
+.trade-panel,
+.bank-trade-note {
+  padding: 0.8rem;
+  background: #fffdf8;
+  border: 1px solid #e4d8c5;
+  border-radius: 8px;
+}
+
+.combat-preview {
+  margin-bottom: 0.7rem;
+}
+
+.combat-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 0.6rem;
+}
+
+.combat-preview-grid div,
+.trade-offer-card {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.55rem;
+  background: #fff;
+  border: 1px solid #eadfcd;
+  border-radius: 8px;
+}
+
+.combat-preview b,
+.monster-callout h3,
+.trade-panel h3 {
+  margin: 0;
+  color: #293d34;
+}
+
+.combat-preview span,
+.combat-preview p,
+.monster-callout dd,
+.bank-trade-note span {
+  color: #65746d;
+  font-size: 0.68rem;
+}
+
+.monster-callout {
+  display: grid;
+  grid-template-columns: 220px 1fr auto;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
+  background: #fff4f2;
+  border-color: #efc8c2;
+}
+
+.monster-callout dl {
+  margin: 0;
+}
+
+.trade-stack {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.panel-title-row,
+.trade-offer-card header,
+.trade-offer-card footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.panel-title-row h3 {
+  margin: 0;
+}
+
+.trade-offer-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.trade-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+}
+
+.trade-columns div {
+  display: flex;
+  min-height: 70px;
+  flex-direction: column;
+  gap: 0.18rem;
+  padding: 0.45rem;
+  background: #f6f9f7;
+  border-radius: 7px;
+}
+
+.trade-columns small,
+.trade-columns em {
+  color: #7b887f;
+  font-size: 0.58rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.trade-columns span {
+  color: #34483e;
+  font-size: 0.65rem;
+}
+
+.trade-status {
+  padding: 0.18rem 0.35rem;
+  border-radius: 5px;
+  background: #fff0dd;
+  color: #9a642b;
+  font-size: 0.55rem;
+  font-weight: 900;
+}
+
+.bank-trade-note {
+  display: grid;
+  gap: 0.2rem;
+  background: #f4f7f5;
+  border-color: #dce5df;
 }
 
 .combat-scene-heading b {
@@ -1477,6 +1876,29 @@ dd {
   color: #8d6935;
 }
 
+.glossary-block {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f4f8f5;
+  border: 1px solid #e0e7e3;
+  border-radius: 8px;
+}
+
+.glossary-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.glossary-chips span {
+  padding: 0.35rem 0.5rem;
+  color: #3f654f;
+  background: #edf5ef;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
 .loading {
   height: 100vh;
   display: grid;
@@ -1495,6 +1917,11 @@ dd {
 
   .action-cards {
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .combat-preview-grid,
+  .monster-callout {
+    grid-template-columns: 1fr;
   }
 
   .controls {

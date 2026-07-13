@@ -1,4 +1,12 @@
+import { useState } from 'react';
 import type { Game, PrivateView } from '../../types/game';
+import {
+  ActionChecklist,
+  BeginnerRecommendation,
+  PhaseGuide,
+  phaseLabel,
+  type GuidanceLevel,
+} from '../guidance/Guidance';
 
 const heroNames: Record<string, string> = {
   KNIGHT: 'Рыцарь',
@@ -11,11 +19,19 @@ const heroNames: Record<string, string> = {
 
 const phaseNames: Record<string, string> = {
   SETUP: 'Подготовка',
+  HERO_SELECTION: 'Hero Selection',
+  HERO_REVEAL: 'Hero Reveal',
   HERO_DRAFT: 'Драфт героев',
   STARTING_PLACEMENT: 'Стартовое размещение',
+  WORLD_ROLL: 'World Roll',
   WORLD: 'Фаза мира',
+  PRODUCTION: 'Production',
+  NEGOTIATION: 'Negotiation',
   MONSTER_EVENT: 'Нашествие',
   MARKET: 'Рынок',
+  ACTION_CARD_SELECTION: 'Action Card Selection',
+  ACTION_CARD_REVEAL: 'Action Card Reveal',
+  PLAYER_TURNS: '3 AP Player Turns',
   PLANNING: 'Тайное планирование',
   REVEAL: 'Раскрытие действий',
   RESOLUTION: 'Разыгрывание действий',
@@ -24,12 +40,24 @@ const phaseNames: Record<string, string> = {
   GAME_OVER: 'Игра окончена',
 };
 
-export function RealmPanel({ game, rolling }: { game: Game; rolling: boolean }) {
+export function RealmPanel({
+  game,
+  rolling,
+  guidanceLevel,
+  view,
+  invalidSelectionReason,
+}: {
+  game: Game;
+  rolling: boolean;
+  guidanceLevel: GuidanceLevel;
+  view?: PrivateView;
+  invalidSelectionReason?: string;
+}) {
   return (
     <aside className="panel realm">
       <p className="eyebrow">Состояние мира</p>
       <h2>{game.name}</h2>
-      <div className="phase">{phaseNames[game.phase] ?? game.phase}</div>
+      <div className="phase">{phaseLabel(game.phase) || phaseNames[game.phase] || game.phase}</div>
 
       <div className="round-summary">
         <span>
@@ -43,6 +71,14 @@ export function RealmPanel({ game, rolling }: { game: Game; rolling: boolean }) 
       </div>
 
       <h3>Игроки</h3>
+      <PhaseGuide
+        game={game}
+        guidanceLevel={guidanceLevel}
+        invalidSelectionReason={invalidSelectionReason}
+      />
+      <ActionChecklist game={game} view={view} />
+      <BeginnerRecommendation game={game} guidanceLevel={guidanceLevel} />
+
       <div className="player-roster">
         {game.players.map((player) => (
           <div className="roster-player" key={player.id}>
@@ -64,15 +100,40 @@ export function RealmPanel({ game, rolling }: { game: Game; rolling: boolean }) 
       <DiceRoll value={game.lastRoll} rolling={rolling} />
 
       <h3>Последние события</h3>
+      <EventLog events={game.eventLog} />
+    </aside>
+  );
+}
+
+function EventLog({ events }: { events: string[] }) {
+  const [filter, setFilter] = useState('ALL');
+  const filters = ['ALL', 'PRODUCTION', 'TRADE', 'BUILD', 'COMBAT', 'MONSTER', 'VICTORY'];
+  const filtered =
+    filter === 'ALL'
+      ? events
+      : events.filter((event) => event.toUpperCase().includes(filter));
+  return (
+    <>
+      <div className="log-filters" aria-label="Event log filters">
+        {filters.map((item) => (
+          <button
+            key={item}
+            className={filter === item ? 'active' : ''}
+            onClick={() => setFilter(item)}
+          >
+            {item === 'ALL' ? 'All' : item[0] + item.slice(1).toLowerCase()}
+          </button>
+        ))}
+      </div>
       <ol className="log">
-        {game.eventLog
+        {filtered
           .slice(-6)
           .reverse()
           .map((event, index) => (
             <li key={`${event}-${index}`}>{event.replaceAll('_', ' ').toLowerCase()}</li>
           ))}
       </ol>
-    </aside>
+    </>
   );
 }
 
@@ -130,7 +191,18 @@ export function PlayerPanel({ view }: { view?: PrivateView }) {
   return (
     <aside className="panel player">
       <p className="eyebrow">Ваш совет</p>
-      <h2>{heroNames[hero.heroClass] ?? hero.heroClass}</h2>
+      <h2>
+        {view.game?.players.find((player) => player.id === view.playerId)?.displayName ??
+          'Current Player'}
+      </h2>
+      <section className="hero-summary-card">
+        <p className="eyebrow">Hero</p>
+        <b>{heroNames[hero.heroClass] ?? hero.heroClass}</b>
+        <span>
+          Location: {hero.location ? `${hero.location.q}, ${hero.location.r}` : 'not placed yet'}
+        </span>
+        <span>Status: {hero.defeated ? 'Defeated' : 'Ready'}</span>
+      </section>
       <div className="hero-stats">
         <b>♥ {hero.hp}/3</b>
         {hero.heroClass === 'MAGE' && <b>✦ {hero.mana}/3 маны</b>}
@@ -139,20 +211,28 @@ export function PlayerPanel({ view }: { view?: PrivateView }) {
 
       <h3>Ресурсы</h3>
       <div className="resources">
-        {Object.entries(view.resources).map(([name, amount]) => (
-          <span key={name}>
-            <i>{resourceIcon(name)}</i>
-            <b>{amount}</b>
-            <small>{resourceName(name)}</small>
-          </span>
-        ))}
+        {Object.entries(view.resources).map(([name, amount]) => {
+          const needed = actionCost(view.selectedAction)?.[name as keyof PrivateView['resources']];
+          return (
+            <span className={needed ? 'needed-resource' : ''} key={name}>
+              <i>{resourceIcon(name)}</i>
+              <b>{amount}</b>
+              <small>{resourceName(name)}</small>
+              {needed ? (
+                <em>
+                  {amount} / {needed}
+                </em>
+              ) : null}
+            </span>
+          );
+        })}
       </div>
 
       <dl>
         <dt>Репутация</dt>
         <dd>{view.reputation}</dd>
         <dt>Слава</dt>
-        <dd>{Object.values(view.glory).reduce((sum, amount) => sum + amount, 0)} / 12</dd>
+        <dd>{Object.values(view.glory).reduce((sum, amount) => sum + amount, 0)} / 10</dd>
         <dt>Укрепления</dt>
         <dd>{view.fortificationTokens}</dd>
       </dl>
@@ -215,4 +295,17 @@ function resourceIcon(name: string) {
     gold: '◈',
   };
   return icons[name];
+}
+
+function actionCost(action?: string) {
+  const none = { wood: 0, food: 0, ore: 0, stone: 0, gold: 0 };
+  const costs: Record<string, PrivateView['resources']> = {
+    BUILD: { ...none, wood: 1, stone: 1 },
+    RECRUIT: { ...none, food: 1 },
+    FORTIFY: { ...none, wood: 1, food: 1, ore: 1 },
+    TRADE: none,
+    EXPLORE: none,
+    ATTACK: none,
+  };
+  return action ? costs[action] : undefined;
 }

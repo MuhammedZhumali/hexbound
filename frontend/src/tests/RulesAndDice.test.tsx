@@ -6,7 +6,7 @@ import type { Game } from '../types/game';
 
 const game = {
   id: 'game',
-  name: 'Четыре короны',
+  name: 'Four Crowns',
   seed: 42,
   debugMode: false,
   status: 'ACTIVE',
@@ -19,7 +19,7 @@ const game = {
   players: [
     {
       id: 'p1',
-      displayName: 'Игрок 1',
+      displayName: 'Player 1',
       color: 'BLUE',
       heroClass: 'KNIGHT',
       glory: 0,
@@ -41,15 +41,17 @@ const game = {
 } as Game;
 
 describe('rules and dice assistance', () => {
-  it('shows concise rules', () => {
+  it('shows the structured rulebook and glossary', () => {
     render(<RulesModal onClose={vi.fn()} />);
-    expect(screen.getByRole('heading', { name: /Как играть/ })).toBeInTheDocument();
-    expect(screen.getByText(/12 Славы/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Hexbound Realms Rulebook/ })).toBeInTheDocument();
+    expect(screen.getByText(/Reach 10 Glory/)).toBeInTheDocument();
+    expect(screen.getByText('Action Card')).toBeInTheDocument();
   });
 
-  it('shows animated dice area below the player roster', () => {
-    const { container } = render(<RealmPanel game={game} rolling />);
-    expect(screen.getByText('Кубики летят…')).toBeInTheDocument();
+  it('shows animated dice area and phase guidance below the player roster', () => {
+    const { container } = render(<RealmPanel game={game} rolling guidanceLevel="BEGINNER" />);
+    expect(screen.getByText(/Кубики летят|ÐšÑƒÐ±Ð¸ÐºÐ¸/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Phase guide')).toBeInTheDocument();
     expect(container.querySelector('.dice-tray.rolling')).toBeInTheDocument();
   });
 });

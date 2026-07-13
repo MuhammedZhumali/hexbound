@@ -9,7 +9,11 @@ public final class GameViewMapper {
   private final SealEvaluator seals = new SealEvaluator();
 
   public PublicGameView publicView(GameState g) {
-    boolean reveal = g.phase == GamePhase.REVEAL || g.phase == GamePhase.RESOLUTION;
+    boolean reveal =
+        g.phase == GamePhase.ACTION_CARD_REVEAL
+            || g.phase == GamePhase.PLAYER_TURNS
+            || g.phase == GamePhase.REVEAL
+            || g.phase == GamePhase.RESOLUTION;
     List<PlayerSummary> players =
         g.players.stream()
             .map(
@@ -30,6 +34,15 @@ public final class GameViewMapper {
                         p.heroConfirmed ? p.hero : null))
             .toList();
     UUID first = g.players.isEmpty() ? null : g.players.get(g.firstPlayerIndex).id;
+    UUID placementPlayer = null;
+    if (g.phase == GamePhase.STARTING_PLACEMENT
+        && g.startingPlacementStep != StartingPlacementStep.COMPLETE
+        && !g.order.initialTurnOrder().isEmpty()) {
+      int index = g.startingPlacementStep == StartingPlacementStep.ROAD
+          ? g.order.initialTurnOrder().size() - 1 - g.currentStartingPlacementIndex
+          : g.currentStartingPlacementIndex;
+      placementPlayer = g.order.initialTurnOrder().get(index);
+    }
     boolean allAttackPlansLocked =
         g.phase == GamePhase.RESOLUTION
             && g.players.stream()
@@ -60,10 +73,19 @@ public final class GameViewMapper {
         g.version,
         g.lastRoll,
         first,
+        g.startingPlacementStep,
+        placementPlayer,
+        g.phase == GamePhase.PLAYER_TURNS && !g.players.isEmpty()
+            ? (!g.actionTurnOrder.isEmpty() && g.actionTurnOrderIndex < g.actionTurnOrder.size()
+                ? g.actionTurnOrder.get(g.actionTurnOrderIndex)
+                : g.players.get(g.currentTurnIndex).id)
+            : null,
         List.copyOf(g.map),
         players,
         List.copyOf(g.monsters),
         List.copyOf(g.market),
+        List.copyOf(g.tradeProposals),
+        List.copyOf(g.explorationResults),
         List.copyOf(g.eventLog),
         List.copyOf(g.winners),
         attackPlans,
@@ -82,6 +104,7 @@ public final class GameViewMapper {
         p.selectedAction,
         p.previousAction,
         p.fortificationTokens,
+        p.basicActionPoints,
         List.copyOf(p.settlements),
         List.copyOf(p.roads),
         List.copyOf(p.units),

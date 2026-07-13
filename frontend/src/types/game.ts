@@ -25,6 +25,7 @@ export type Player = {
   color: string;
   heroClass?: string;
   glory: number;
+  activeSealCount?: number;
   reputation: number;
   hasSelectedAction: boolean;
   hasLockedAttackPlan: boolean;
@@ -69,14 +70,35 @@ export type Game = {
   version: number;
   lastRoll?: number;
   firstPlayerId?: string;
+  currentTurnPlayerId?: string;
+  startingPlacementStep?: 'OUTPOST' | 'ROAD' | 'COMPLETE';
+  currentStartingPlacementPlayerId?: string;
   map: Hex[];
   players: Player[];
   monsters: Monster[];
   market: Card[];
+  tradeProposals?: TradeProposal[];
+  explorationResults?: ExplorationResult[];
   eventLog: string[];
   winners: string[];
   revealedAttackPlans: AttackPlanView[];
   combatReport: CombatReportEntry[];
+};
+export type TradeProposal = {
+  proposalId: string;
+  proposerPlayerId: string;
+  targetPlayerId: string;
+  offeredResources: Resources;
+  requestedResources: Resources;
+  offeredGold: number;
+  requestedGold: number;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED';
+};
+export type ExplorationResult = {
+  playerId: string;
+  target: Coord;
+  type: string;
+  description: string;
 };
 export type CombatReportEntry = {
   attackerId: string;
@@ -128,6 +150,7 @@ export type PrivateView = {
   selectedAction?: string;
   previousAction?: string;
   fortificationTokens: number;
+  basicActionPoints: number;
   settlements: Settlement[];
   roads: Road[];
   units: Unit[];

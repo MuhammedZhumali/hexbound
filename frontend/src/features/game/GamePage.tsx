@@ -4,10 +4,14 @@ import { useParams } from 'react-router-dom';
 import { api } from '../../api/client';
 import { subscribeGame } from '../../api/websocket';
 import { Board } from '../../components/board/Board';
+import { CombatPreview, MonsterEventModal } from '../../components/combat/CombatPanels';
 import { RulesModal } from '../../components/dialogs/RulesModal';
 import { PlayerPanel, RealmPanel } from '../../components/panels/Panels';
+import { ActionButton } from '../../components/actions/ActionButton';
+import { BankTradePanel, PendingTradesPanel } from '../../components/trade/TradePanels';
 import { useUi } from '../../store/ui';
 import type { Coord, Game, HeroDraft, PrivateView, Resources, Seat } from '../../types/game';
+import type { GuidanceLevel } from '../../components/guidance/Guidance';
 
 const ACTIONS = [
   {
@@ -48,7 +52,43 @@ const ACTIONS = [
   },
 ] as const;
 
-const ACTION_ORDER = ACTIONS.map((action) => action.id);
+const ACTION_ORDER = ['EXPLORE', 'TRADE', 'BUILD', 'RECRUIT', 'FORTIFY', 'ATTACK'] as const;
+type ActionId = (typeof ACTION_ORDER)[number];
+
+const ACTION_COPY: Record<ActionId, { icon: string; title: string; text: string }> = {
+  EXPLORE: {
+    icon: '⌁',
+    title: 'Explore',
+    text: 'Scout a nearby hex. Explore card: first explore costs 0 AP.',
+  },
+  TRADE: {
+    icon: '◇',
+    title: 'Trade',
+    text: 'Negotiate freely and use better bank rates. Trade card: bank trade is 3:1.',
+  },
+  BUILD: {
+    icon: '⌂',
+    title: 'Build',
+    text: 'Roads and outposts are cheaper. Build card: first road costs 0 AP.',
+  },
+  RECRUIT: {
+    icon: '♟',
+    title: 'Recruit',
+    text: 'Raise troops. Recruit card: first Militia costs 0 AP.',
+  },
+  FORTIFY: {
+    icon: '⬟',
+    title: 'Fortify',
+    text: 'Gain defense tokens at the start of your turn.',
+  },
+  ATTACK: {
+    icon: '⚔',
+    title: 'Attack',
+    text: 'Resolve one simple d20 attack. Attack card: first attack costs 1 AP.',
+  },
+};
+
+const ACTION_DECK = ACTION_ORDER.map((id) => ({ id, ...ACTION_COPY[id] }));
 
 const HEROES = [
   {
@@ -122,7 +162,16 @@ export function GamePage() {
   const [rolling, setRolling] = useState(false);
   const [error, setError] = useState('');
   const [reaction, setReaction] = useState('SHIELD');
+  const [invalidSelectionReason, setInvalidSelectionReason] = useState('');
+  const [guidanceLevel, setGuidanceLevel] = useState<GuidanceLevel>(() => {
+    const stored = localStorage.getItem('hexbound:guidance');
+    return stored === 'NORMAL' || stored === 'EXPERT' ? stored : 'BEGINNER';
+  });
   const { selected, reset, connection, setConnection } = useUi();
+
+  useEffect(() => {
+    localStorage.setItem('hexbound:guidance', guidanceLevel);
+  }, [guidanceLevel]);
 
   const legalQuery = useQuery({
     queryKey: ['legal', id, seat?.playerId, game?.version],
@@ -132,12 +181,16 @@ export function GamePage() {
   const heroDraftQuery = useQuery({
     queryKey: ['hero-draft', id, game?.version],
     queryFn: () => api.heroDraft(id),
-    enabled: game?.phase === 'HERO_DRAFT' || game?.phase === 'STARTING_PLACEMENT',
+    enabled:
+      game?.phase === 'HERO_SELECTION' ||
+      game?.phase === 'HERO_DRAFT' ||
+      game?.phase === 'HERO_REVEAL' ||
+      game?.phase === 'STARTING_PLACEMENT',
   });
 
   useEffect(() => {
     if (
-      game?.phase === 'HERO_DRAFT' &&
+      (game?.phase === 'HERO_SELECTION' || game?.phase === 'HERO_DRAFT') &&
       heroDraftQuery.data?.currentDraftPlayerId &&
       !seat &&
       !handover
@@ -174,6 +227,10 @@ export function GamePage() {
       }
 
       if (variables.type === 'SELECT_ACTION') {
+        if (updatedGame.phase === 'RESOLUTION' || updatedGame.phase === 'ACTION_CARD_REVEAL') {
+          if (seat) setView(await api.private(id, seat));
+          return;
+        }
         const nextSeat = seats.find((candidate) => {
           const player = updatedGame.players.find((item) => item.id === candidate.playerId);
           return player && !player.hasSelectedAction;
@@ -194,6 +251,34 @@ export function GamePage() {
         setSeat(undefined);
         if (nextSeat) setHandover(nextSeat);
         return;
+      }
+
+      if (
+        variables.type === 'START_STARTING_PLACEMENT' ||
+        variables.type === 'PLACE_STARTING_OUTPOST' ||
+        variables.type === 'PLACE_STARTING_ROAD'
+      ) {
+        const nextSeat = seats.find(
+          (candidate) => candidate.playerId === updatedGame.currentStartingPlacementPlayerId,
+        );
+        if (nextSeat && nextSeat.playerId !== seat?.playerId) {
+          setView(undefined);
+          setSeat(undefined);
+          setHandover(nextSeat);
+          return;
+        }
+      }
+
+      if (updatedGame.phase === 'PLAYER_TURNS' && updatedGame.currentTurnPlayerId) {
+        const nextSeat = seats.find(
+          (candidate) => candidate.playerId === updatedGame.currentTurnPlayerId,
+        );
+        if (nextSeat && nextSeat.playerId !== seat?.playerId) {
+          setView(undefined);
+          setSeat(undefined);
+          setHandover(nextSeat);
+          return;
+        }
       }
 
       if (variables.type === 'LOCK_ATTACK_PLAN') {
@@ -247,6 +332,22 @@ export function GamePage() {
 
   const current = game.players.find((player) => player.id === seat?.playerId);
   const nextResolver = getNextResolver(game);
+  const activePlayer =
+    game.players.find(
+      (player) =>
+        player.id ===
+        (game.currentStartingPlacementPlayerId ??
+          game.currentTurnPlayerId ??
+          nextResolver?.id ??
+          game.firstPlayerId),
+    ) ?? current;
+  const legalTargets = [
+    ...(legalQuery.data?.buildTargets ?? []),
+    ...(game.phase === 'STARTING_PLACEMENT' ? legalQuery.data?.movementTargets ?? [] : []),
+    ...(game.phase === 'PLAYER_TURNS' || game.phase === 'RESOLUTION'
+      ? legalQuery.data?.movementTargets ?? []
+      : []),
+  ];
 
   return (
     <main className="game">
@@ -261,6 +362,24 @@ export function GamePage() {
         <div className="brand">
           HEXBOUND <i>REALMS</i>
         </div>
+        <span className={`phase-badge phase-${game.phase.toLowerCase()}`}>{game.phase.replaceAll('_', ' ')}</span>
+        <span className="header-meta">Round {game.roundNumber}</span>
+        <span className="header-meta">{activePlayer ? `Waiting for ${activePlayer.displayName}` : 'No active player'}</span>
+        {game.lastRoll && <span className="header-meta">Dice {game.lastRoll}</span>}
+        <button className="victory-pill" onClick={() => setRulesOpen(true)}>
+          Glory {Math.max(0, ...game.players.map((player) => player.glory ?? 0))}/10
+        </button>
+        <label className="guidance-select">
+          Guidance
+          <select
+            value={guidanceLevel}
+            onChange={(event) => setGuidanceLevel(event.target.value as GuidanceLevel)}
+          >
+            <option value="BEGINNER">Beginner</option>
+            <option value="NORMAL">Normal</option>
+            <option value="EXPERT">Expert</option>
+          </select>
+        </label>
         <span className="header-meta">
           Мир <code>{game.id.slice(0, 8)}</code>
         </span>
@@ -273,14 +392,25 @@ export function GamePage() {
         <span className={`status ${connection}`}>● {connectionLabel(connection)}</span>
       </header>
 
-      <RealmPanel game={game} rolling={rolling} />
+      <RealmPanel
+        game={game}
+        rolling={rolling}
+        guidanceLevel={guidanceLevel}
+        view={view}
+        invalidSelectionReason={invalidSelectionReason}
+      />
       <section className="map">
-        <Board game={game} legal={legalQuery.data?.buildTargets ?? []} />
+        <Board
+          game={game}
+          legal={legalTargets}
+          explainInvalid={(hex) => setInvalidSelectionReason(invalidHexReason(game, hex.terrain))}
+        />
       </section>
       <PlayerPanel view={view} />
 
       <section className="controls">
         <CombatScene game={game} />
+        <MonsterEventModal game={game} busy={mutation.isPending} onContinue={() => send('RESOLVE_ACTION')} />
         <div className="control-heading">
           <div>
             <p className="eyebrow">Управление ходом</p>
@@ -322,11 +452,13 @@ export function GamePage() {
             selected={selected}
             legalActions={legalQuery.data?.actions}
             legalBuildTargets={legalQuery.data?.buildTargets ?? []}
+            legalMovementTargets={legalQuery.data?.movementTargets ?? []}
             heroDraft={heroDraftQuery.data}
             send={send}
             busy={mutation.isPending}
             reaction={reaction}
             setReaction={setReaction}
+            guidanceLevel={guidanceLevel}
             currentName={current?.displayName}
             canResolve={!nextResolver || nextResolver.id === view?.playerId}
             nextResolverName={nextResolver?.displayName}
@@ -415,11 +547,13 @@ export function PhaseControls({
   selected,
   legalActions,
   legalBuildTargets,
+  legalMovementTargets = [],
   heroDraft,
   send,
   busy,
   reaction,
   setReaction,
+  guidanceLevel = 'BEGINNER',
   currentName,
   canResolve,
   nextResolverName,
@@ -429,25 +563,129 @@ export function PhaseControls({
   selected?: Coord;
   legalActions?: string[];
   legalBuildTargets: string[];
+  legalMovementTargets?: string[];
   heroDraft?: HeroDraft;
   send: (type: string, payload?: unknown) => void;
   busy: boolean;
   reaction: string;
   setReaction: (reaction: string) => void;
+  guidanceLevel?: GuidanceLevel;
   currentName?: string;
   canResolve: boolean;
   nextResolverName?: string;
 }) {
   const [draftAction, setDraftAction] = useState<string>();
+  const [tradeTarget, setTradeTarget] = useState('');
+  const [offerType, setOfferType] = useState<keyof Resources>('wood');
+  const [requestType, setRequestType] = useState<keyof Resources>('food');
+  const [offerAmount, setOfferAmount] = useState(1);
+  const [requestAmount, setRequestAmount] = useState(1);
+  const [offeredGold, setOfferedGold] = useState(0);
+  const [requestedGold, setRequestedGold] = useState(0);
 
   useEffect(() => setDraftAction(undefined), [view?.playerId, game.phase, view?.selectedAction]);
 
   if (!view) return null;
 
+  if (game.phase === 'STARTING_PLACEMENT') {
+    if (game.status !== 'ACTIVE') {
+      return (
+        <div className="phase-action-row">
+          <div><b>Manual starting placement</b><span>Outposts go in turn order; Roads go in reverse order.</span></div>
+          <button className="primary large-button" disabled={busy} onClick={() => send('START_STARTING_PLACEMENT')}>Begin placement</button>
+        </div>
+      );
+    }
+    const isTurn = game.currentStartingPlacementPlayerId === view.playerId;
+    const selectedKey = selected && `${selected.q},${selected.r}`;
+    const isOutpost = game.startingPlacementStep === 'OUTPOST';
+    const legal = Boolean(selectedKey && (isOutpost
+      ? legalBuildTargets.includes(selectedKey)
+      : legalMovementTargets.includes(selectedKey)));
+    const currentPlayer = game.players.find((player) => player.id === game.currentStartingPlacementPlayerId);
+    return (
+      <div className="phase-action-row">
+        <div>
+          <b>{isOutpost ? 'Place a starting Outpost' : 'Place a starting Road'}</b>
+          <span>{isTurn ? 'Select a highlighted hex; the server validates it.' : `Waiting for ${currentPlayer?.displayName ?? 'the current player'}.`}</span>
+        </div>
+        <button className="primary large-button" disabled={busy || !isTurn || !legal}
+          onClick={() => send(isOutpost ? 'PLACE_STARTING_OUTPOST' : 'PLACE_STARTING_ROAD', isOutpost ? { at: selected } : { to: selected })}>
+          Confirm {isOutpost ? 'Outpost' : 'Road'}
+        </button>
+      </div>
+    );
+  }
+
+  if (game.phase === 'NEGOTIATION' || game.phase === 'TRADE_NEGOTIATION') {
+    const empty = (): Resources => ({ wood: 0, food: 0, ore: 0, stone: 0, gold: 0 });
+    const offered = empty();
+    const requested = empty();
+    offered[offerType] = offerAmount;
+    requested[requestType] = requestAmount;
+    const pending = (game.tradeProposals ?? []).filter((proposal) => proposal.status === 'PENDING');
+    return (
+      <div className="planning-layout">
+        <div className="resolution-card">
+          <h3>Open Trade &amp; Negotiation</h3>
+          <label>Trade with<select value={tradeTarget} onChange={(event) => setTradeTarget(event.target.value)}>
+            <option value="">Choose player</option>
+            {game.players.filter((player) => player.id !== view.playerId).map((player) =>
+              <option key={player.id} value={player.id}>{player.displayName}</option>)}
+          </select></label>
+          <label>Offer<select value={offerType} onChange={(event) => setOfferType(event.target.value as keyof Resources)}>{resourceOptions()}</select>
+            <input type="number" min="0" value={offerAmount} onChange={(event) => setOfferAmount(Math.max(0, Number(event.target.value)))} /></label>
+          <label>Request<select value={requestType} onChange={(event) => setRequestType(event.target.value as keyof Resources)}>{resourceOptions()}</select>
+            <input type="number" min="0" value={requestAmount} onChange={(event) => setRequestAmount(Math.max(0, Number(event.target.value)))} /></label>
+          <label>Offer gold<input type="number" min="0" value={offeredGold} onChange={(event) => setOfferedGold(Math.max(0, Number(event.target.value)))} /></label>
+          <label>Request gold<input type="number" min="0" value={requestedGold} onChange={(event) => setRequestedGold(Math.max(0, Number(event.target.value)))} /></label>
+          <button className="primary" disabled={busy || !tradeTarget} onClick={() => send('PROPOSE_TRADE', {
+            targetPlayerId: tradeTarget, offeredResources: offered, requestedResources: requested, offeredGold, requestedGold,
+          })}>Propose trade</button>
+        </div>
+        <div className="resolution-card">
+          <h3>Pending proposals</h3>
+          {pending.length === 0 && <p>No proposals yet.</p>}
+          {pending.map((proposal) => <div key={proposal.proposalId} className="phase-action-row">
+            <span>{game.players.find((p) => p.id === proposal.proposerPlayerId)?.displayName} → {game.players.find((p) => p.id === proposal.targetPlayerId)?.displayName}</span>
+            {proposal.targetPlayerId === view.playerId && <><button onClick={() => send('ACCEPT_TRADE', { proposalId: proposal.proposalId })}>Accept</button><button onClick={() => send('REJECT_TRADE', { proposalId: proposal.proposalId })}>Reject</button></>}
+            {proposal.proposerPlayerId === view.playerId && <button onClick={() => send('CANCEL_TRADE', { proposalId: proposal.proposalId })}>Cancel</button>}
+          </div>)}
+          <PendingTradesPanel game={game} playerId={view.playerId} busy={busy} send={send} />
+          {guidanceLevel === 'BEGINNER' && (
+            <BankTradePanel
+              rate="Bank fallback: 4 resources for 1"
+              tip="Player trades are usually better, but the bank is always safe."
+            />
+          )}
+          <button className="primary" disabled={busy} onClick={() => send('RESOLVE_ACTION')}>Close negotiations</button>
+        </div>
+      </div>
+    );
+  }
+
   switch (game.phase) {
+    case 'HERO_SELECTION':
     case 'HERO_DRAFT':
       return (
         <HeroDraftControls game={game} view={view} draft={heroDraft} busy={busy} send={send} />
+      );
+
+    case 'HERO_REVEAL':
+      return (
+        <div className="phase-action-row">
+          <div>
+            <b>Heroes revealed</b>
+            <span>All heroes are public. Begin manual starting placement.</span>
+          </div>
+          <button
+            className="primary large-button"
+            disabled={busy}
+            onClick={() => send('START_STARTING_PLACEMENT')}
+          >
+            Begin placement
+          </button>
+        </div>
       );
 
     case 'STARTING_PLACEMENT':
@@ -469,6 +707,7 @@ export function PhaseControls({
         </div>
       );
 
+    case 'WORLD_ROLL':
     case 'WORLD':
       return (
         <div className="phase-action-row">
@@ -492,6 +731,23 @@ export function PhaseControls({
               Следующий бросок: 7
             </button>
           )}
+        </div>
+      );
+
+    case 'PRODUCTION':
+      return (
+        <div className="phase-action-row">
+          <div>
+            <b>Production resolved</b>
+            <span>Matching settlements produced resources. Continue to negotiation.</span>
+          </div>
+          <button
+            className="primary large-button"
+            disabled={busy}
+            onClick={() => send('RESOLVE_ACTION')}
+          >
+            Start negotiation
+          </button>
         </div>
       );
 
@@ -536,7 +792,35 @@ export function PhaseControls({
         </div>
       );
 
+    case 'PLAYER_TURNS':
+    case 'ACTION_CARD_SELECTION':
     case 'PLANNING': {
+      if (game.phase === 'PLAYER_TURNS') {
+        const activeCard = view.selectedAction ?? 'No card';
+        return (
+          <div className="planning-layout">
+            <div className="resolution-card">
+              <h3>{currentName} Turn · {activeCard} card active · AP {view.basicActionPoints}/3</h3>
+              <p>Spend up to 3 Action Points. The revealed card changes costs for this turn.</p>
+              <button disabled={busy || view.basicActionPoints < 1 || !selected} onClick={() => send('MOVE_HERO', { to: selected })}>Move Hero · 1 AP</button>
+              <button disabled={busy || !selected} onClick={() => send('EXPLORE', { target: selected })}>Explore Hex · {view.selectedAction === 'EXPLORE' ? '0/1' : '1'} AP</button>
+              <button disabled={busy || view.resources.food < 1} onClick={() => send('RECRUIT', { unitType: 'MILITIA' })}>Recruit Militia · {view.selectedAction === 'RECRUIT' ? '0/1' : '1'} AP</button>
+              <button disabled={busy || !selected} onClick={() => {
+                const from = view.roads.flatMap((road) => [road.from, road.to]).find((coordinate) =>
+                  Math.max(Math.abs(coordinate.q - selected!.q), Math.abs(coordinate.r - selected!.r)) <= 1) ?? view.settlements[0]?.location;
+                send('BUILD_ROAD', { from, to: selected });
+              }}>Build Road · {view.selectedAction === 'BUILD' ? '0/1' : '1'} AP</button>
+              <label>Bank Trade · 1 AP<select value={offerType} onChange={(event) => setOfferType(event.target.value as keyof Resources)}>{resourceOptions()}</select>
+                <select value={requestType} onChange={(event) => setRequestType(event.target.value as keyof Resources)}>{resourceOptions()}</select></label>
+              <button disabled={busy || view.basicActionPoints < 1 || offerType === requestType || view.resources[offerType] < (view.selectedAction === 'TRADE' ? 3 : 4)}
+                onClick={() => send('BANK_TRADE', { give: offerType.toUpperCase(), receive: requestType.toUpperCase() })}>Trade with bank · 1 AP</button>
+              <button className="primary" disabled={busy} onClick={() => send('END_PLAYER_TURN')}>
+                End Player Turn
+              </button>
+            </div>
+          </div>
+        );
+      }
       if (view.selectedAction) {
         return (
           <div className="locked-action">
@@ -554,29 +838,34 @@ export function PhaseControls({
       return (
         <div className="planning-layout">
           <div className="action-cards">
-            {ACTIONS.map((action) => {
+            {ACTION_DECK.map((action) => {
               const coolingDown = action.id === view.previousAction;
               const allowed = legalActions ? legalActions.includes(action.id) : !coolingDown;
+              const disabledReason = coolingDown
+                ? 'This action card was used last round.'
+                : !allowed
+                  ? 'The backend says this action is not available right now.'
+                  : undefined;
               return (
-                <button
-                  className={`action-card ${draftAction === action.id ? 'selected' : ''}`}
+                <ActionButton
                   key={action.id}
-                  disabled={busy || !allowed}
+                  icon={action.icon}
+                  label={action.title}
+                  summary={action.text}
+                  cost={mainActionCost(action.id)}
+                  selected={draftAction === action.id}
+                  busy={busy}
+                  disabledReason={disabledReason}
                   onClick={() => setDraftAction(action.id)}
-                >
-                  <span>{action.icon}</span>
-                  <b>{action.title}</b>
-                  <small>{action.text}</small>
-                  {coolingDown && <em>Перезарядка</em>}
-                </button>
+                />
               );
             })}
           </div>
           <div className="planning-confirm">
             <span>
               {draftAction
-                ? `Выбрано: ${ACTIONS.find((action) => action.id === draftAction)?.title}`
-                : 'Сначала выберите одну карту'}
+                ? `Selected: ${ACTION_COPY[draftAction as ActionId]?.title ?? draftAction}`
+                : 'Choose one secret action card'}
             </span>
             <button
               className="primary large-button"
@@ -590,12 +879,15 @@ export function PhaseControls({
       );
     }
 
+    case 'ACTION_CARD_REVEAL':
     case 'REVEAL':
       return (
         <div className="reveal-layout">
           <div className="revealed-actions">
             {game.players.map((player) => {
-              const action = ACTIONS.find((item) => item.id === player.revealedAction);
+              const action =
+                ACTION_COPY[player.revealedAction as ActionId] ??
+                ACTIONS.find((item) => item.id === player.revealedAction);
               return (
                 <span key={player.id}>
                   <i className={`player-dot ${player.color.toLowerCase()}`} />
@@ -624,7 +916,8 @@ export function PhaseControls({
         );
       }
       return (
-        <Resolution
+          <Resolution
+          game={game}
           view={view}
           selected={selected}
           legalBuildTargets={legalBuildTargets}
@@ -764,6 +1057,7 @@ function HeroDraftControls({
 }
 
 function Resolution({
+  game,
   view,
   selected,
   legalBuildTargets,
@@ -772,6 +1066,7 @@ function Resolution({
   reaction,
   setReaction,
 }: {
+  game: Game;
   view: PrivateView;
   selected?: Coord;
   legalBuildTargets: string[];
@@ -994,6 +1289,8 @@ function Resolution({
 
   const [sourceQ, sourceR] = attackSource.split(',').map(Number);
   return (
+    <>
+    <CombatPreview game={game} view={view} />
     <div className="resolution-card">
       <div>
         <h3>⚔ Тайный план атаки</h3>
@@ -1053,6 +1350,7 @@ function Resolution({
         Зафиксировать план атаки
       </button>
     </div>
+    </>
   );
 }
 
@@ -1080,6 +1378,34 @@ function covers(resources: Resources, cost: Resources) {
     resources.stone >= cost.stone &&
     resources.gold >= cost.gold
   );
+}
+
+function mainActionCost(action: string) {
+  const costs: Record<string, string> = {
+    EXPLORE: 'Card bonus: first explore costs 0 AP',
+    TRADE: 'Card bonus: bank trade improves to 3:1',
+    BUILD: 'Card bonus: first road costs 0 AP',
+    RECRUIT: 'Card bonus: first Militia costs 0 AP',
+    FORTIFY: 'Card bonus: defense tokens at turn start',
+    ATTACK: 'Card bonus: first attack costs 1 AP',
+  };
+  return costs[action] ?? '3 AP turn, backend validated';
+}
+
+function invalidHexReason(game: Game, terrain: string) {
+  if (game.phase === 'STARTING_PLACEMENT') {
+    if (terrain === 'RUIN' || terrain === 'MONSTER_LAIR' || terrain === 'ANCIENT_CAPITAL') {
+      return 'You cannot place a starting Outpost on this feature hex.';
+    }
+    if (game.startingPlacementStep === 'ROAD') {
+      return 'Starting Roads must extend from the Outpost placed by the current player.';
+    }
+    return 'This hex is locked because it is too close, occupied, blocked, or not a valid starting terrain.';
+  }
+  if (game.phase === 'PLAYER_TURNS' || game.phase === 'RESOLUTION') {
+    return 'This hex is not currently listed by the backend as a legal target.';
+  }
+  return 'This hex is informational in the current phase.';
 }
 
 function heroInitial(heroClass?: string) {
@@ -1135,16 +1461,23 @@ function getNextResolver(game: Game) {
 function phaseInstruction(phase: string) {
   return (
     {
-      HERO_DRAFT: 'Выберите героев в обратном порядке инициативы',
-      STARTING_PLACEMENT: 'Подтвердите размещение змейкой',
-      WORLD: 'Бросьте кубики и распределите производство',
-      MONSTER_EVENT: 'Оцените новую угрозу',
-      MARKET: 'Изучите пять предложений рынка',
-      PLANNING: 'Каждый игрок тайно выбирает карту действия',
-      REVEAL: 'Карты раскрыты — проверьте порядок',
-      RESOLUTION: 'Разыграйте действия по очереди',
-      END_ROUND: 'Восстановите силы и передайте жетон первого игрока',
-    }[phase] ?? 'Следуйте текущей фазе'
+      HERO_SELECTION: 'Choose heroes secretly, then reveal together',
+      HERO_REVEAL: 'Heroes are revealed; begin starting placement',
+      HERO_DRAFT: 'Choose heroes',
+      STARTING_PLACEMENT: 'Place starting outposts and roads manually',
+      WORLD_ROLL: 'First player rolls 2d6',
+      WORLD: 'First player rolls 2d6',
+      PRODUCTION: 'Production resolved; continue to negotiation',
+      MONSTER_EVENT: 'Review the monster event, then negotiate',
+      NEGOTIATION: 'Negotiate player trades freely',
+      TRADE_NEGOTIATION: 'Negotiate player trades freely',
+      ACTION_CARD_SELECTION: 'Each player secretly chooses one action card',
+      PLANNING: 'Each player secretly chooses one action card',
+      ACTION_CARD_REVEAL: 'Cards are revealed; start 3 AP turns by initiative',
+      REVEAL: 'Cards are revealed; start 3 AP turns by initiative',
+      PLAYER_TURNS: 'Active player spends up to 3 AP',
+      END_ROUND: 'Clean up and pass the first-player marker',
+    }[phase] ?? 'Follow the current backend phase'
   );
 }
 
@@ -1164,7 +1497,16 @@ function readableError(message: string) {
       'Для атаки нужен хотя бы один готовый полевой отряд.',
     'Road must extend your connected network': 'Дорога должна продолжать вашу существующую сеть.',
     'Select an Ancient Ruin within hero range':
-      'Выберите древние руины в радиусе перемещения героя.',
+      'Choose an exploration target within hero range. Exploration can apply to more than Ruins.',
+    INVALID_TARGET: 'You cannot use that target for this action right now.',
+    INSUFFICIENT_RESOURCES: 'You do not have the resources required for that action.',
+    NOT_YOUR_TURN: 'This decision belongs to another player right now.',
+    'Not enough resources': 'You do not have the resources required for that action.',
   };
-  return translations[message] ?? message;
+  return (
+    translations[message] ??
+    (message.includes('_')
+      ? 'Something went wrong. Please try again or refresh the game state.'
+      : message)
+  );
 }

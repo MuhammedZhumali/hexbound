@@ -10,6 +10,7 @@ it('shows mana and fatigue in private player view', () => {
     reputation: 0,
     fortificationTokens: 0,
     activeSeals: [],
+    hand: [],
     units: [
       {
         id: 'u',

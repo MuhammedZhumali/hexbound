@@ -29,7 +29,7 @@ export const api = {
       headers: { 'X-Player-Token': seat.accessToken },
     }),
   legal: (id: string, playerId: string) =>
-    request<{ actions: string[]; buildTargets: string[] }>(
+    request<{ actions: string[]; movementTargets: string[]; buildTargets: string[]; attackTargets: string[] }>(
       `/api/v1/games/${id}/legal-actions?playerId=${playerId}`,
     ),
   command: (game: Game, seat: Seat, type: string, payload: unknown = {}) =>

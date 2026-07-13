@@ -36,6 +36,8 @@ public final class DefaultGameEngine implements GameEngine {
       case GameCommand.ConfirmHero ignored -> confirmHero(game, player, events);
       case GameCommand.CancelHeroSelection ignored -> cancelHero(game, player, events);
       case GameCommand.StartStartingPlacement ignored -> startingPlacement(game, events);
+      case GameCommand.PlaceStartingOutpost c -> placeStartingOutpost(game, player, c, events);
+      case GameCommand.PlaceStartingRoad c -> placeStartingRoad(game, player, c, events);
       case GameCommand.ProposeHeroSwap c -> proposeHeroSwap(game, player, c, events);
       case GameCommand.AcceptHeroSwap c -> acceptHeroSwap(game, player, c, events);
       case GameCommand.RollWorld c -> roll(game, player, c, events);
@@ -45,11 +47,14 @@ public final class DefaultGameEngine implements GameEngine {
       case GameCommand.BuildOutpost c -> buildOutpost(game, player, c, events);
       case GameCommand.Recruit c -> recruit(game, player, c, events);
       case GameCommand.Trade c -> trade(game, player, c, events);
+      case GameCommand.BankTrade c -> bankTrade(game, player, c, events);
+      case GameCommand.ProposeTrade c -> proposeTrade(game, player, c, events);
+      case GameCommand.AcceptTrade c -> acceptTrade(game, player, c, events);
+      case GameCommand.RejectTrade c -> closeTrade(game, player, c.proposalId(), TradeStatus.REJECTED, events);
+      case GameCommand.CancelTrade c -> closeTrade(game, player, c.proposalId(), TradeStatus.CANCELLED, events);
       case GameCommand.Explore c -> explore(game, player, c, events);
       case GameCommand.MoveHero c -> move(game, player, c, events);
-      case GameCommand.Attack ignored ->
-          throw DomainException.of(
-              "ATTACK_PLAN_REQUIRED", "Submit and lock a complete Attack Plan");
+      case GameCommand.Attack c -> attack(game, player, c, events);
       case GameCommand.LockAttackPlan c -> lockAttackPlan(game, player, c, events);
       case GameCommand.ResolveAttackBatch ignored -> resolveAttackBatch(game, player, events);
       case GameCommand.Fortify ignored -> fortify(game, player, events);
@@ -58,9 +63,11 @@ public final class DefaultGameEngine implements GameEngine {
       case GameCommand.Debug c -> debug(game, player, c, events);
     }
     List<PlayerState> qualified = victory.qualified(game);
-    if (!qualified.isEmpty() && game.phase != GamePhase.GAME_OVER) {
-      game.phase = GamePhase.FINAL_ROUND;
-      events.add(event("FINAL_ROUND_STARTED", "playerId", qualified.getFirst().id));
+    if (!qualified.isEmpty() && game.phase == GamePhase.END_ROUND) {
+      game.winners = qualified.stream().map(p -> p.id).toList();
+      game.phase = GamePhase.GAME_OVER;
+      game.status = GameStatus.FINISHED;
+      events.add(event("GAME_OVER", "winners", game.winners));
     }
     game.eventLog.addAll(events.stream().map(DomainEvent::type).toList());
     return new CommandResult(game, List.copyOf(events));
@@ -78,14 +85,13 @@ public final class DefaultGameEngine implements GameEngine {
     g.players.sort(Comparator.comparingInt(p -> initialOrder.indexOf(p.id)));
     g.firstPlayerIndex = 0;
     g.currentHeroDraftIndex = 0;
-    g.phase = GamePhase.HERO_DRAFT;
-    e.add(new DomainEvent("HERO_DRAFT_STARTED", Map.of("draftOrder", draftOrder)));
+    g.phase = GamePhase.HERO_SELECTION;
+    e.add(new DomainEvent("HERO_SELECTION_STARTED", Map.of("turnOrder", initialOrder)));
   }
 
   private void selectHero(
       GameState g, PlayerState p, GameCommand.SelectHero c, List<DomainEvent> e) {
-    phase(g, GamePhase.HERO_DRAFT);
-    requireDraftTurn(g, p);
+    phase(g, GamePhase.HERO_SELECTION);
     if (p.heroConfirmed) {
       throw DomainException.of(
           "HERO_ALREADY_CONFIRMED", "Confirmed Hero cannot be changed directly");
@@ -95,8 +101,7 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void confirmHero(GameState g, PlayerState p, List<DomainEvent> e) {
-    phase(g, GamePhase.HERO_DRAFT);
-    requireDraftTurn(g, p);
+    phase(g, GamePhase.HERO_SELECTION);
     if (p.temporaryHeroClass == null) {
       throw DomainException.of("HERO_NOT_SELECTED", "Select a Hero before confirmation");
     }
@@ -106,22 +111,14 @@ public final class DefaultGameEngine implements GameEngine {
     e.add(
         new DomainEvent(
             "HERO_CONFIRMED", Map.of("playerId", p.id, "heroClass", p.hero.heroClass())));
-    g.currentHeroDraftIndex++;
-    if (g.currentHeroDraftIndex >= g.order.heroDraftOrder().size()) {
-      g.phase = GamePhase.STARTING_PLACEMENT;
-      e.add(event("HERO_DRAFT_COMPLETED", "count", g.players.size()));
-    } else {
-      e.add(
-          event(
-              "HERO_DRAFT_TURN_CHANGED",
-              "playerId",
-              g.order.heroDraftOrder().get(g.currentHeroDraftIndex)));
+    if (g.players.stream().allMatch(player -> player.heroConfirmed)) {
+      g.phase = GamePhase.HERO_REVEAL;
+      e.add(event("HEROES_REVEALED", "count", g.players.size()));
     }
   }
 
   private void cancelHero(GameState g, PlayerState p, List<DomainEvent> e) {
-    phase(g, GamePhase.HERO_DRAFT);
-    requireDraftTurn(g, p);
+    phase(g, GamePhase.HERO_SELECTION);
     if (p.heroConfirmed) {
       throw DomainException.of("HERO_ALREADY_CONFIRMED", "Confirmed Hero cannot be cancelled");
     }
@@ -130,49 +127,100 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void startingPlacement(GameState g, List<DomainEvent> e) {
-    phase(g, GamePhase.STARTING_PLACEMENT);
+    if (g.phase != GamePhase.HERO_REVEAL && g.phase != GamePhase.STARTING_PLACEMENT)
+      throw DomainException.of("INVALID_PHASE", "Expected HERO_REVEAL before starting placement");
     if (g.players.stream().anyMatch(player -> !player.heroConfirmed || player.hero == null)) {
       throw DomainException.of("HERO_DRAFT_INCOMPLETE", "Every player must confirm a Hero");
     }
+    if (g.players.stream().anyMatch(player -> !player.settlements.isEmpty())) {
+      throw DomainException.of("PLACEMENT_ALREADY_STARTED", "Starting placement is already underway");
+    }
     g.status = GameStatus.ACTIVE;
-    g.roundNumber = 1;
-    List<MapHex> outer =
-        g.map.stream()
-            .filter(
-                h ->
-                    h.coordinate().distanceTo(new HexCoordinate(0, 0)) == 3 && h.resource() != null)
-            .toList();
-    List<PlayerState> placementOrder =
-        g.order.initialTurnOrder().stream()
-            .map(
-                id ->
-                    g.players.stream()
-                        .filter(player -> player.id.equals(id))
-                        .findFirst()
-                        .orElseThrow())
-            .toList();
-    for (int i = 0; i < placementOrder.size(); i++) {
-      PlayerState p = placementOrder.get(i);
-      HexCoordinate at =
-          outer.get((i * outer.size() / g.players.size()) % outer.size()).coordinate();
-      p.settlements.add(new SettlementState(UUID.randomUUID(), at, SettlementLevel.OUTPOST, 2));
-      p.hero = new HeroState(p.hero.heroClass(), 3, p.hero.mana(), p.hero.grace(), at, false);
+    g.phase = GamePhase.STARTING_PLACEMENT;
+    g.startingPlacementStep = StartingPlacementStep.OUTPOST;
+    g.currentStartingPlacementIndex = 0;
+    e.add(event("STARTING_PLACEMENT_STARTED", "playerId", placementPlayerId(g)));
+  }
+
+  private void placeStartingOutpost(
+      GameState g, PlayerState p, GameCommand.PlaceStartingOutpost c, List<DomainEvent> e) {
+    phase(g, GamePhase.STARTING_PLACEMENT);
+    requirePlacementTurn(g, p, StartingPlacementStep.OUTPOST);
+    if (!startingOutpostLegal(g, c.at())) {
+      throw DomainException.of("INVALID_STARTING_OUTPOST", "Starting Outpost is not legal");
     }
-    List<PlayerState> roadOrder = new ArrayList<>(placementOrder);
-    Collections.reverse(roadOrder);
-    for (PlayerState p : roadOrder) {
-      HexCoordinate at = p.settlements.getFirst().location();
-      HexCoordinate next =
-          at.neighbors().stream()
-              .filter(n -> g.map.stream().anyMatch(h -> h.coordinate().equals(n)))
-              .findFirst()
-              .orElseThrow();
-      p.roads.add(new RoadState(UUID.randomUUID(), at, next));
-      p.units.add(
-          new UnitState(UUID.randomUUID(), UnitType.MILITIA, FatigueState.READY, false, true, 0));
+    p.settlements.add(new SettlementState(UUID.randomUUID(), c.at(), SettlementLevel.OUTPOST, 2));
+    p.hero = new HeroState(
+        p.hero.heroClass(), p.hero.hp(), p.hero.mana(), p.hero.grace(), c.at(), false);
+    e.add(new DomainEvent("STARTING_OUTPOST_PLACED", Map.of("playerId", p.id, "at", c.at())));
+    g.currentStartingPlacementIndex++;
+    if (g.currentStartingPlacementIndex == g.players.size()) {
+      g.startingPlacementStep = StartingPlacementStep.ROAD;
+      g.currentStartingPlacementIndex = 0;
     }
-    g.phase = GamePhase.WORLD;
-    e.add(event("GAME_STARTED", "round", 1));
+    e.add(event("STARTING_PLACEMENT_TURN_CHANGED", "playerId", placementPlayerId(g)));
+  }
+
+  private void placeStartingRoad(
+      GameState g, PlayerState p, GameCommand.PlaceStartingRoad c, List<DomainEvent> e) {
+    phase(g, GamePhase.STARTING_PLACEMENT);
+    requirePlacementTurn(g, p, StartingPlacementStep.ROAD);
+    HexCoordinate from = p.settlements.getFirst().location();
+    MapHex target = hex(g, c.to());
+    boolean occupiedByHostile = g.monsters.stream().anyMatch(m -> m.location().equals(c.to()));
+    boolean edgeUsed = g.players.stream().flatMap(x -> x.roads.stream()).anyMatch(
+        r -> (r.from().equals(from) && r.to().equals(c.to()))
+            || (r.to().equals(from) && r.from().equals(c.to())));
+    if (from.distanceTo(c.to()) != 1 || target == null || occupiedByHostile || edgeUsed) {
+      throw DomainException.of("INVALID_STARTING_ROAD", "Road must reach an adjacent valid hex");
+    }
+    p.roads.add(new RoadState(UUID.randomUUID(), from, c.to()));
+    p.units.add(new UnitState(UUID.randomUUID(), UnitType.MILITIA, FatigueState.READY, false, true, 0));
+    e.add(new DomainEvent(
+        "STARTING_ROAD_PLACED", Map.of("playerId", p.id, "from", from, "to", c.to())));
+    g.currentStartingPlacementIndex++;
+    if (g.currentStartingPlacementIndex == g.players.size()) {
+      g.startingPlacementStep = StartingPlacementStep.COMPLETE;
+      g.roundNumber = 1;
+      g.phase = GamePhase.WORLD_ROLL;
+      e.add(event("GAME_STARTED", "round", 1));
+    } else {
+      e.add(event("STARTING_PLACEMENT_TURN_CHANGED", "playerId", placementPlayerId(g)));
+    }
+  }
+
+  private boolean startingOutpostLegal(GameState g, HexCoordinate at) {
+    MapHex hex = hex(g, at);
+    if (hex == null || !isBuildableStartingTerrain(hex.terrain())) return false;
+    if (g.players.stream().flatMap(p -> p.settlements.stream()).anyMatch(s -> s.location().equals(at))) return false;
+    if (g.monsters.stream().anyMatch(m -> m.location().equals(at))) return false;
+    return g.players.stream().flatMap(p -> p.settlements.stream())
+        .allMatch(s -> s.location().distanceTo(at) >= 2);
+  }
+
+  private boolean isBuildableStartingTerrain(TerrainType terrain) {
+    return terrain == TerrainType.FOREST || terrain == TerrainType.FIELD
+        || terrain == TerrainType.MOUNTAIN || terrain == TerrainType.QUARRY
+        || terrain == TerrainType.TRADE_LAND;
+  }
+
+  private void requirePlacementTurn(GameState g, PlayerState p, StartingPlacementStep step) {
+    if (g.startingPlacementStep != step)
+      throw DomainException.of("INVALID_PLACEMENT_STEP", "Expected starting " + step);
+    if (!placementPlayerId(g).equals(p.id))
+      throw DomainException.of("NOT_PLAYER_TURN", "Another player must place now");
+  }
+
+  private UUID placementPlayerId(GameState g) {
+    List<UUID> order = g.order.initialTurnOrder();
+    int index = g.startingPlacementStep == StartingPlacementStep.ROAD
+        ? order.size() - 1 - g.currentStartingPlacementIndex
+        : g.currentStartingPlacementIndex;
+    return order.get(index);
+  }
+
+  private MapHex hex(GameState g, HexCoordinate at) {
+    return g.map.stream().filter(h -> h.coordinate().equals(at)).findFirst().orElse(null);
   }
 
   private void requireDraftTurn(GameState g, PlayerState p) {
@@ -184,7 +232,10 @@ public final class DefaultGameEngine implements GameEngine {
 
   private void proposeHeroSwap(
       GameState g, PlayerState p, GameCommand.ProposeHeroSwap c, List<DomainEvent> e) {
-    phase(g, GamePhase.STARTING_PLACEMENT);
+    if (g.phase != GamePhase.HERO_REVEAL && g.phase != GamePhase.STARTING_PLACEMENT)
+      throw DomainException.of("INVALID_PHASE", "Hero swaps are only available before placement");
+    if (g.status == GameStatus.ACTIVE)
+      throw DomainException.of("PLACEMENT_ALREADY_STARTED", "Heroes cannot swap after placement begins");
     PlayerState target =
         g.players.stream()
             .filter(player -> player.id.equals(c.targetPlayerId()))
@@ -208,7 +259,8 @@ public final class DefaultGameEngine implements GameEngine {
 
   private void acceptHeroSwap(
       GameState g, PlayerState p, GameCommand.AcceptHeroSwap c, List<DomainEvent> e) {
-    phase(g, GamePhase.STARTING_PLACEMENT);
+    if (g.phase != GamePhase.HERO_REVEAL && g.phase != GamePhase.STARTING_PLACEMENT)
+      throw DomainException.of("INVALID_PHASE", "Hero swaps are only available before placement");
     HeroSwapProposal proposal =
         g.heroSwapProposals.stream()
             .filter(item -> item.proposalId().equals(c.proposalId()))
@@ -230,7 +282,7 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void roll(GameState g, PlayerState p, GameCommand.RollWorld c, List<DomainEvent> e) {
-    phase(g, GamePhase.WORLD);
+    phase(g, GamePhase.WORLD_ROLL);
     if (!g.players.get(g.firstPlayerIndex).id.equals(p.id))
       throw DomainException.of("NOT_PLAYER_TURN", "Only the first player rolls");
     int roll =
@@ -246,7 +298,7 @@ public final class DefaultGameEngine implements GameEngine {
       e.add(event("MONSTER_SPAWNED", "monsterId", monster.id()));
     } else {
       ProductionResolver.ProductionReport report = production.resolve(g, roll);
-      g.phase = GamePhase.MARKET;
+      g.phase = GamePhase.PRODUCTION;
       e.add(
           new DomainEvent(
               "PRODUCTION_RESOLVED", Map.of("roll", roll, "production", report.production())));
@@ -255,7 +307,15 @@ public final class DefaultGameEngine implements GameEngine {
 
   private void buyMarketCard(
       GameState g, PlayerState p, GameCommand.BuyMarketCard c, List<DomainEvent> e) {
-    phase(g, GamePhase.MARKET);
+    boolean turn = g.phase == GamePhase.PLAYER_TURNS;
+    if (turn) {
+      requireCurrentTurn(g, p);
+      int cost = p.selectedAction == ActionType.TRADE && !p.freeTradeCardBuyUsed ? 0 : 1;
+      spendActionPoints(p, cost);
+      if (cost == 0) p.freeTradeCardBuyUsed = true;
+    } else {
+      phase(g, GamePhase.MARKET);
+    }
     Card card =
         g.market.stream()
             .filter(item -> item.id().equals(c.cardId()))
@@ -289,42 +349,67 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void select(GameState g, PlayerState p, GameCommand.SelectAction c, List<DomainEvent> e) {
-    phase(g, GamePhase.PLANNING);
+    if (g.phase != GamePhase.ACTION_CARD_SELECTION && g.phase != GamePhase.PLANNING)
+      throw DomainException.of("INVALID_PHASE", "Action Cards are selected after negotiation");
     if (p.actionLocked) throw DomainException.of("ACTION_LOCKED", "Action already locked");
     if (c.action() == p.previousAction)
       throw DomainException.of("ACTION_ON_COOLDOWN", "Choose a different action this round");
     p.selectedAction = c.action();
     p.actionLocked = true;
-    e.add(event("ACTION_SELECTED", "playerId", p.id));
+    e.add(event("ACTION_CARD_SELECTED", "playerId", p.id));
     if (g.players.stream().allMatch(x -> x.actionLocked)) {
-      g.phase = GamePhase.REVEAL;
-      e.add(event("ALL_ACTIONS_LOCKED", "count", g.players.size()));
+      g.phase = GamePhase.ACTION_CARD_REVEAL;
+      e.add(
+          new DomainEvent(
+              "ACTION_CARDS_REVEALED",
+              Map.of(
+                  "actions",
+                  g.players.stream()
+                      .collect(
+                          java.util.stream.Collectors.toMap(
+                              x -> x.id, x -> x.selectedAction.name())),
+                  "turnOrder",
+                  actionTurnOrder(g))));
     }
   }
 
   private void buildRoad(GameState g, PlayerState p, GameCommand.BuildRoad c, List<DomainEvent> e) {
-    resolutionAction(g, p, ActionType.BUILD);
+    boolean turn = g.phase == GamePhase.PLAYER_TURNS;
+    if (turn) {
+      requireCurrentTurn(g, p);
+      spendActionPoints(p, roadActionPointCost(p));
+    } else resolutionAction(g, p, ActionType.BUILD);
     Resources cost = new Resources(1, 0, 0, 1, 0);
     if (!building.roadLegal(g, p, c.from(), c.to()))
       throw DomainException.of("INVALID_TARGET", "Road must extend your connected network");
     p.resources = p.resources.subtract(cost);
     p.roads.add(new RoadState(UUID.randomUUID(), c.from(), c.to()));
-    finishAction(g, p, e, "ROAD_BUILT");
+    if (turn) e.add(event("ROAD_BUILT", "playerId", p.id));
+    else finishAction(g, p, e, "ROAD_BUILT");
   }
 
   private void buildOutpost(
       GameState g, PlayerState p, GameCommand.BuildOutpost c, List<DomainEvent> e) {
-    resolutionAction(g, p, ActionType.BUILD);
+    boolean turn = g.phase == GamePhase.PLAYER_TURNS;
+    if (turn) {
+      requireCurrentTurn(g, p);
+      spendActionPoints(p, p.selectedAction == ActionType.BUILD ? 1 : 2);
+    } else resolutionAction(g, p, ActionType.BUILD);
     Resources cost = new Resources(1, 1, 0, 1, 0);
     if (!building.outpostLegal(g, p, c.at()))
       throw DomainException.of("INVALID_TARGET", "Outpost target is not legal");
     p.resources = p.resources.subtract(cost);
     p.settlements.add(new SettlementState(UUID.randomUUID(), c.at(), SettlementLevel.OUTPOST, 2));
-    finishAction(g, p, e, "OUTPOST_BUILT");
+    if (turn) e.add(event("OUTPOST_BUILT", "playerId", p.id));
+    else finishAction(g, p, e, "OUTPOST_BUILT");
   }
 
   private void recruit(GameState g, PlayerState p, GameCommand.Recruit c, List<DomainEvent> e) {
-    resolutionAction(g, p, ActionType.RECRUIT);
+    boolean turn = g.phase == GamePhase.PLAYER_TURNS;
+    if (turn) {
+      requireCurrentTurn(g, p);
+      spendActionPoints(p, recruitActionPointCost(p, c.unitType()));
+    } else resolutionAction(g, p, ActionType.RECRUIT);
     Resources cost =
         switch (c.unitType()) {
           case MILITIA -> new Resources(0, 1, 0, 0, 0);
@@ -342,24 +427,171 @@ public final class DefaultGameEngine implements GameEngine {
             false,
             false,
             c.unitType() == UnitType.MERCENARY ? g.roundNumber + 1 : 0));
-    finishAction(g, p, e, "UNIT_RECRUITED");
+    if (turn) e.add(event("UNIT_RECRUITED", "playerId", p.id));
+    else finishAction(g, p, e, "UNIT_RECRUITED");
   }
 
   private void trade(GameState g, PlayerState p, GameCommand.Trade c, List<DomainEvent> e) {
     resolutionAction(g, p, ActionType.TRADE);
-    if (c.give() == c.receive()) {
-      throw DomainException.of("INVALID_TARGET", "Trade resources must be different");
-    }
-    p.resources = p.resources.subtract(resourceCost(c.give(), 1)).add(c.receive(), 1);
+    int rate = p.hero.heroClass() == HeroClass.MERCHANT ? 2 : 3;
+    executeBankTrade(p, c.give(), c.receive(), rate);
     e.add(
         new DomainEvent(
             "TRADE_COMPLETED",
-            Map.of("playerId", p.id, "gave", c.give(), "received", c.receive())));
+            Map.of("playerId", p.id, "gave", c.give(), "amount", rate, "received", c.receive())));
     finishAction(g, p, e, "TRADE_RESOLVED");
   }
 
+  private void bankTrade(GameState g, PlayerState p, GameCommand.BankTrade c, List<DomainEvent> e) {
+    if (g.phase != GamePhase.PLAYER_TURNS) {
+      throw DomainException.of("INVALID_PHASE", "Bank trades happen during a Player Turn");
+    }
+    requireCurrentTurn(g, p);
+    spendActionPoints(p, 1);
+    int rate = p.selectedAction == ActionType.TRADE
+        ? p.hero.heroClass() == HeroClass.MERCHANT ? 2 : 3
+        : 4;
+    executeBankTrade(p, c.give(), c.receive(), rate);
+    e.add(new DomainEvent(
+        "BANK_TRADE_COMPLETED",
+        Map.of("playerId", p.id, "gave", c.give(), "amount", rate, "received", c.receive())));
+  }
+
+  private void executeBankTrade(PlayerState p, ResourceType give, ResourceType receive, int rate) {
+    if (give == receive) throw DomainException.of("INVALID_TARGET", "Trade resources must be different");
+    try {
+      p.resources = p.resources.subtract(resourceCost(give, rate)).add(receive, 1);
+    } catch (IllegalArgumentException ex) {
+      throw DomainException.of("INSUFFICIENT_RESOURCES", "Not enough resources for bank trade");
+    }
+  }
+
+  private void proposeTrade(
+      GameState g, PlayerState p, GameCommand.ProposeTrade c, List<DomainEvent> e) {
+    requireTradePhase(g);
+    if (g.phase == GamePhase.PLAYER_TURNS) {
+      requireCurrentTurn(g, p);
+    }
+    PlayerState target = g.players.stream().filter(x -> x.id.equals(c.targetPlayerId())).findFirst()
+        .orElseThrow(() -> DomainException.of("INVALID_PLAYER", "Trade target not found"));
+    if (target == p) throw DomainException.of("INVALID_TARGET", "Cannot trade with yourself");
+    if (c.offeredGold() < 0 || c.requestedGold() < 0)
+      throw DomainException.of("INVALID_PAYLOAD", "Gold amounts cannot be negative");
+    if (isEmpty(c.offeredResources(), c.offeredGold()) && isEmpty(c.requestedResources(), c.requestedGold()))
+      throw DomainException.of("INVALID_PAYLOAD", "Trade must exchange something");
+    TradeProposal proposal;
+    try {
+      proposal = new TradeProposal(
+          UUID.randomUUID(), p.id, target.id, c.offeredResources(), c.requestedResources(),
+          c.offeredGold(), c.requestedGold(), TradeStatus.PENDING);
+    } catch (IllegalArgumentException ex) {
+      throw DomainException.of("INVALID_PAYLOAD", ex.getMessage());
+    }
+    g.tradeProposals.add(proposal);
+    e.add(event("TRADE_PROPOSED", "proposalId", proposal.proposalId()));
+  }
+
+  private void acceptTrade(
+      GameState g, PlayerState p, GameCommand.AcceptTrade c, List<DomainEvent> e) {
+    requireTradePhase(g);
+    TradeProposal proposal = pendingTrade(g, c.proposalId());
+    if (!proposal.targetPlayerId().equals(p.id))
+      throw DomainException.of("NOT_PLAYER_TURN", "Only the target player may accept");
+    PlayerState proposer = player(g, proposal.proposerPlayerId());
+    Resources offered = withAdditionalGold(proposal.offeredResources(), proposal.offeredGold());
+    Resources requested = withAdditionalGold(proposal.requestedResources(), proposal.requestedGold());
+    if (!proposer.resources.covers(offered) || !p.resources.covers(requested))
+      throw DomainException.of("INSUFFICIENT_RESOURCES", "Trade holdings changed before acceptance");
+    proposer.resources = proposer.resources.subtract(offered).plus(requested);
+    p.resources = p.resources.subtract(requested).plus(offered);
+    replaceTrade(g, proposal.withStatus(TradeStatus.ACCEPTED));
+    e.add(event("PLAYER_TRADE_COMPLETED", "proposalId", proposal.proposalId()));
+  }
+
+  private void closeTrade(
+      GameState g, PlayerState p, UUID proposalId, TradeStatus status, List<DomainEvent> e) {
+    requireTradePhase(g);
+    TradeProposal proposal = pendingTrade(g, proposalId);
+    UUID authorized = status == TradeStatus.CANCELLED
+        ? proposal.proposerPlayerId() : proposal.targetPlayerId();
+    if (!authorized.equals(p.id))
+      throw DomainException.of("NOT_PLAYER_TURN", "Player cannot close this proposal");
+    replaceTrade(g, proposal.withStatus(status));
+    e.add(event("TRADE_" + status.name(), "proposalId", proposalId));
+  }
+
+  private void requireTradePhase(GameState g) {
+    if (g.phase != GamePhase.NEGOTIATION && g.phase != GamePhase.TRADE_NEGOTIATION
+        && g.phase != GamePhase.PLAYER_TURNS
+        && !(g.phase == GamePhase.RESOLUTION))
+      throw DomainException.of("INVALID_PHASE", "Trades are not open now");
+  }
+
+  private TradeProposal pendingTrade(GameState g, UUID id) {
+    return g.tradeProposals.stream()
+        .filter(t -> t.proposalId().equals(id) && t.status() == TradeStatus.PENDING)
+        .findFirst().orElseThrow(() -> DomainException.of("INVALID_TARGET", "Pending trade not found"));
+  }
+
+  private void replaceTrade(GameState g, TradeProposal replacement) {
+    g.tradeProposals.replaceAll(t -> t.proposalId().equals(replacement.proposalId()) ? replacement : t);
+  }
+
+  private boolean isEmpty(Resources resources, int extraGold) {
+    return resources.equals(Resources.none()) && extraGold == 0;
+  }
+
+  private Resources withAdditionalGold(Resources resources, int gold) {
+    return resources.add(ResourceType.GOLD, gold);
+  }
+
+  private void spendActionPoints(PlayerState p, int cost) {
+    if (cost < 0) throw DomainException.of("INVALID_ACTION_COST", "Action Point cost cannot be negative");
+    if (p.basicActionPoints < cost)
+      throw DomainException.of("NO_ACTION_POINTS", "Not enough Action Points remain");
+    p.basicActionPoints -= cost;
+  }
+
+  private int roadActionPointCost(PlayerState p) {
+    if ((p.selectedAction == ActionType.BUILD || p.hero.heroClass() == HeroClass.ENGINEER)
+        && !p.freeRoadUsed) {
+      p.freeRoadUsed = true;
+      return 0;
+    }
+    return 1;
+  }
+
+  private int recruitActionPointCost(PlayerState p, UnitType unitType) {
+    if (unitType == UnitType.MILITIA && p.selectedAction == ActionType.RECRUIT && !p.freeMilitiaUsed) {
+      p.freeMilitiaUsed = true;
+      return 0;
+    }
+    if (unitType == UnitType.MILITIA) return 1;
+    return p.selectedAction == ActionType.RECRUIT ? 1 : 2;
+  }
+
+  private int exploreActionPointCost(PlayerState p) {
+    if (p.selectedAction == ActionType.EXPLORE && !p.freeExploreUsed) {
+      p.freeExploreUsed = true;
+      return 0;
+    }
+    return 1;
+  }
+
+  private int attackActionPointCost(PlayerState p) {
+    if (p.selectedAction == ActionType.ATTACK && !p.attackDiscountUsed) {
+      p.attackDiscountUsed = true;
+      return 1;
+    }
+    return 2;
+  }
+
   private void explore(GameState g, PlayerState p, GameCommand.Explore c, List<DomainEvent> e) {
-    resolutionAction(g, p, ActionType.EXPLORE);
+    boolean turn = g.phase == GamePhase.PLAYER_TURNS;
+    if (turn) {
+      requireCurrentTurn(g, p);
+      spendActionPoints(p, exploreActionPointCost(p));
+    } else resolutionAction(g, p, ActionType.EXPLORE);
     if (p.hero.location() == null) {
       throw DomainException.of("INVALID_TARGET", "Hero is not on the map");
     }
@@ -369,14 +601,21 @@ public final class DefaultGameEngine implements GameEngine {
             .filter(h -> h.coordinate().equals(c.target()))
             .findFirst()
             .orElseThrow(() -> DomainException.of("INVALID_TARGET", "Unknown hex"));
-    if (target.terrain() != TerrainType.RUIN || p.hero.location().distanceTo(c.target()) > range) {
-      throw DomainException.of("INVALID_TARGET", "Select an Ancient Ruin within hero range");
+    if (p.hero.location().distanceTo(c.target()) > range)
+      throw DomainException.of("INVALID_TARGET", "Select a hex within Hero exploration range");
+    if (!p.exploredHexes.add(c.target()))
+      throw DomainException.of("INVALID_TARGET", "This hex was already explored by the Hero");
+    ExplorationResultType resultType = explorationType(target);
+    if (resultType == ExplorationResultType.BONUS_RESOURCE) {
+      ResourceType reward = target.resource() == null ? ResourceType.FOOD : target.resource();
+      p.resources = p.resources.add(reward, p.hero.heroClass() == HeroClass.RANGER ? 2 : 1);
+    } else if (resultType == ExplorationResultType.TRADE_CONTACT) {
+      p.resources = p.resources.add(ResourceType.GOLD, 1);
+    } else if (resultType == ExplorationResultType.ARTIFACT_CLUE) {
+      p.resources = p.resources.add(ResourceType.GOLD, 1);
+      p.reputation = Math.min(12, p.reputation + 1);
     }
-    if (!p.exploredRuins.add(c.target())) {
-      throw DomainException.of("INVALID_TARGET", "This ruin was already explored by the hero");
-    }
-    p.resources = p.resources.add(ResourceType.GOLD, 1);
-    p.reputation = Math.min(12, p.reputation + 1);
+    if (target.terrain() == TerrainType.RUIN) p.exploredRuins.add(c.target());
     SealProgress old = p.sealProgress;
     p.sealProgress =
         new SealProgress(
@@ -388,23 +627,58 @@ public final class DefaultGameEngine implements GameEngine {
             p.exploredRuins.size(),
             old.artifacts(),
             old.permanent());
+    ExplorationResult result = new ExplorationResult(p.id, c.target(), resultType, explorationDescription(target));
+    g.explorationResults.add(result);
     e.add(
         new DomainEvent(
-            "RUIN_EXPLORED", Map.of("playerId", p.id, "target", c.target(), "gold", 1)));
-    finishAction(g, p, e, "EXPLORE_RESOLVED");
+            "HEX_EXPLORED", Map.of("playerId", p.id, "target", c.target(), "result", resultType)));
+    if (turn) e.add(event("HEX_EXPLORED_BY_ACTION_POINT", "playerId", p.id));
+    else finishAction(g, p, e, "EXPLORE_RESOLVED");
+  }
+
+  private ExplorationResultType explorationType(MapHex target) {
+    return switch (target.terrain()) {
+      case FOREST, FIELD, MOUNTAIN, QUARRY -> ExplorationResultType.BONUS_RESOURCE;
+      case TRADE_LAND -> ExplorationResultType.TRADE_CONTACT;
+      case VILLAGE -> ExplorationResultType.LOCAL_QUEST;
+      case MONSTER_LAIR -> ExplorationResultType.MONSTER_CLUE;
+      case RUIN, ANCIENT_CAPITAL -> ExplorationResultType.ARTIFACT_CLUE;
+    };
+  }
+
+  private String explorationDescription(MapHex target) {
+    return switch (target.terrain()) {
+      case FOREST -> "A hidden trail and useful woodland supplies";
+      case FIELD -> "A concealed cache in the wilderness";
+      case MOUNTAIN, QUARRY -> "A promising mineral deposit";
+      case TRADE_LAND -> "A new caravan contact";
+      case VILLAGE -> "A local request for assistance";
+      case MONSTER_LAIR -> "Clues about the resident monster";
+      case RUIN, ANCIENT_CAPITAL -> "Signs of a buried artifact";
+    };
   }
 
   private void fortify(GameState g, PlayerState p, List<DomainEvent> e) {
+    if (g.phase == GamePhase.PLAYER_TURNS) {
+      requireCurrentTurn(g, p);
+      spendActionPoints(p, 2);
+      p.fortificationTokens += p.hero.heroClass() == HeroClass.ENGINEER ? 3 : 2;
+      e.add(event("FORTIFIED", "playerId", p.id));
+      return;
+    }
     resolutionAction(g, p, ActionType.FORTIFY);
-    p.resources = p.resources.subtract(new Resources(1, 1, 1, 0, 0));
-    p.fortificationTokens += p.hero.heroClass() == HeroClass.ENGINEER ? 4 : 3;
+    p.fortificationTokens += p.hero.heroClass() == HeroClass.ENGINEER ? 3 : 2;
     finishAction(g, p, e, "FORTIFIED");
   }
 
   private void move(GameState g, PlayerState p, GameCommand.MoveHero c, List<DomainEvent> e) {
+    if (g.phase != GamePhase.PLAYER_TURNS)
+      throw DomainException.of("INVALID_PHASE", "Hero movement is a Basic Action during your turn");
+    requireCurrentTurn(g, p);
+    spendActionPoints(p, 1);
     if (p.hero.location() == null)
       throw DomainException.of("INVALID_TARGET", "Hero is not on the map");
-    int range = p.hero.heroClass() == HeroClass.RANGER ? 2 : 1;
+    int range = 1;
     if (p.hero.location().distanceTo(c.to()) > range
         || g.map.stream().noneMatch(h -> h.coordinate().equals(c.to())))
       throw DomainException.of("TARGET_NOT_ADJACENT", "Target exceeds hero movement range");
@@ -420,7 +694,15 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void attack(GameState g, PlayerState p, GameCommand.Attack c, List<DomainEvent> e) {
-    resolutionAction(g, p, ActionType.ATTACK);
+    boolean turn = g.phase == GamePhase.PLAYER_TURNS;
+    if (turn) {
+      requireCurrentTurn(g, p);
+      if (p.selectedAction != ActionType.ATTACK)
+        throw DomainException.of("ATTACK_CARD_REQUIRED", "Full Attack requires the ATTACK card");
+      spendActionPoints(p, attackActionPointCost(p));
+    } else {
+      resolutionAction(g, p, ActionType.ATTACK);
+    }
     if (p.hero.location() == null || p.hero.location().distanceTo(c.target()) > 1)
       throw DomainException.of("TARGET_NOT_ADJACENT", "Attack target must be adjacent");
     List<UnitState> attackers =
@@ -506,7 +788,8 @@ public final class DefaultGameEngine implements GameEngine {
                 result.counterDamage(),
                 "strongRetaliation",
                 result.strongRetaliation())));
-    finishAction(g, p, e, "ATTACK_RESOLVED");
+    if (turn) e.add(event("ATTACK_RESOLVED", "playerId", p.id));
+    else finishAction(g, p, e, "ATTACK_RESOLVED");
   }
 
   private void lockAttackPlan(
@@ -628,6 +911,11 @@ public final class DefaultGameEngine implements GameEngine {
         new DomainEvent(
             "SIMULTANEOUS_COMBAT_RESOLVED",
             Map.of("conflicts", conflictReports, "rolls", batch.reports())));
+    if (g.hybridTurnMode) {
+      p.mainActionCompletedThisRound = true;
+      advancePlayerTurn(g, e);
+      return;
+    }
     if (g.players.stream().noneMatch(player -> player.actionLocked)) {
       g.phase = GamePhase.END_ROUND;
       e.add(event("RESOLUTION_COMPLETE", "round", g.roundNumber));
@@ -709,26 +997,57 @@ public final class DefaultGameEngine implements GameEngine {
 
   private void resolveOrAdvance(GameState g, PlayerState p, List<DomainEvent> e) {
     if (g.phase == GamePhase.MONSTER_EVENT) {
-      g.phase = GamePhase.MARKET;
+      g.phase = GamePhase.NEGOTIATION;
       e.add(event("MONSTER_EVENT_CLOSED", "round", g.roundNumber));
       return;
     }
-    if (g.phase == GamePhase.MARKET) {
-      g.phase = GamePhase.PLANNING;
-      e.add(event("PLANNING_STARTED", "round", g.roundNumber));
+    if (g.phase == GamePhase.PRODUCTION) {
+      g.phase = GamePhase.NEGOTIATION;
+      e.add(event("PRODUCTION_CLOSED", "round", g.roundNumber));
       return;
     }
-    if (g.phase == GamePhase.REVEAL) {
-      g.phase = GamePhase.RESOLUTION;
+    if (g.phase == GamePhase.NEGOTIATION || g.phase == GamePhase.TRADE_NEGOTIATION) {
+      g.tradeProposals.replaceAll(
+          trade -> trade.status() == TradeStatus.PENDING
+              ? trade.withStatus(TradeStatus.EXPIRED) : trade);
+      for (PlayerState player : g.players) {
+        player.selectedAction = null;
+        player.actionLocked = false;
+      }
+      g.phase = GamePhase.ACTION_CARD_SELECTION;
+      e.add(event("NEGOTIATION_CLOSED", "round", g.roundNumber));
+      return;
+    }
+    if (g.phase == GamePhase.PLAYER_TURNS) {
+      requireCurrentTurn(g, p);
+      p.mainActionCompletedThisRound = true;
+      p.basicActionPoints = 0;
+      p.previousAction = p.selectedAction;
+      p.selectedAction = null;
+      p.actionLocked = false;
+      e.add(event("MAIN_ACTION_SKIPPED", "playerId", p.id));
+      advancePlayerTurn(g, e);
+      return;
+    }
+    if (g.phase == GamePhase.ACTION_CARD_REVEAL || g.phase == GamePhase.REVEAL) {
+      g.hybridTurnMode = true;
+      g.actionTurnOrder = actionTurnOrder(g);
+      g.actionTurnOrderIndex = 0;
+      for (PlayerState player : g.players) {
+        player.basicActionPoints = 0;
+        player.mainActionCompletedThisRound = false;
+        resetTurnDiscounts(player);
+      }
+      PlayerState first = player(g, g.actionTurnOrder.getFirst());
+      startPlayerTurn(g, first);
+      g.currentTurnIndex = g.players.indexOf(first);
+      g.phase = GamePhase.PLAYER_TURNS;
       e.add(
           new DomainEvent(
-              "ACTIONS_REVEALED",
+              "PLAYER_TURNS_STARTED",
               Map.of(
-                  "actions",
-                  g.players.stream()
-                      .collect(
-                          java.util.stream.Collectors.toMap(
-                              x -> x.id, x -> x.selectedAction.name())))));
+                  "playerId", first.id,
+                  "turnOrder", g.actionTurnOrder)));
       return;
     }
     phase(g, GamePhase.RESOLUTION);
@@ -745,10 +1064,85 @@ public final class DefaultGameEngine implements GameEngine {
     p.selectedAction = null;
     p.actionLocked = false;
     e.add(event(type, "playerId", p.id));
+    if (g.hybridTurnMode) {
+      p.mainActionCompletedThisRound = true;
+      advancePlayerTurn(g, e);
+      return;
+    }
     if (g.players.stream().noneMatch(x -> x.actionLocked)) {
       g.phase = GamePhase.END_ROUND;
       e.add(event("RESOLUTION_COMPLETE", "round", g.roundNumber));
     }
+  }
+
+  private void requireCurrentTurn(GameState g, PlayerState p) {
+    if (g.phase != GamePhase.PLAYER_TURNS || !currentTurnPlayer(g).id.equals(p.id))
+      throw DomainException.of("NOT_PLAYER_TURN", "Another player is taking their turn");
+  }
+
+  private PlayerState currentTurnPlayer(GameState g) {
+    if (!g.actionTurnOrder.isEmpty() && g.actionTurnOrderIndex < g.actionTurnOrder.size()) {
+      return player(g, g.actionTurnOrder.get(g.actionTurnOrderIndex));
+    }
+    return g.players.get(g.currentTurnIndex);
+  }
+
+  private void startPlayerTurn(GameState g, PlayerState p) {
+    p.basicActionPoints = 3;
+    resetTurnDiscounts(p);
+    if (p.selectedAction == ActionType.FORTIFY) {
+      p.fortificationTokens += p.hero.heroClass() == HeroClass.ENGINEER ? 3 : 2;
+    }
+  }
+
+  private void resetTurnDiscounts(PlayerState p) {
+    p.freeExploreUsed = false;
+    p.freeTradeCardBuyUsed = false;
+    p.freeRoadUsed = false;
+    p.freeMilitiaUsed = false;
+    p.attackDiscountUsed = false;
+  }
+
+  private List<UUID> actionTurnOrder(GameState g) {
+    return g.players.stream()
+        .filter(player -> player.selectedAction != null)
+        .sorted(
+            Comparator.comparingInt((PlayerState player) -> player.selectedAction.ordinal())
+                .thenComparingInt(
+                    player -> Math.floorMod(g.players.indexOf(player) - g.firstPlayerIndex, g.players.size())))
+        .map(player -> player.id)
+        .toList();
+  }
+
+  private void advancePlayerTurn(GameState g, List<DomainEvent> e) {
+    if (g.players.stream().allMatch(player -> player.mainActionCompletedThisRound)) {
+      g.phase = GamePhase.END_ROUND;
+      e.add(event("PLAYER_TURNS_COMPLETE", "round", g.roundNumber));
+      return;
+    }
+    if (!g.actionTurnOrder.isEmpty()) {
+      do {
+        g.actionTurnOrderIndex++;
+      } while (g.actionTurnOrderIndex < g.actionTurnOrder.size()
+          && player(g, g.actionTurnOrder.get(g.actionTurnOrderIndex)).mainActionCompletedThisRound);
+      if (g.actionTurnOrderIndex >= g.actionTurnOrder.size()) {
+        g.phase = GamePhase.END_ROUND;
+        e.add(event("PLAYER_TURNS_COMPLETE", "round", g.roundNumber));
+        return;
+      }
+      PlayerState next = player(g, g.actionTurnOrder.get(g.actionTurnOrderIndex));
+      startPlayerTurn(g, next);
+      g.currentTurnIndex = g.players.indexOf(next);
+      g.phase = GamePhase.PLAYER_TURNS;
+      e.add(event("PLAYER_TURN_STARTED", "playerId", next.id));
+      return;
+    }
+    do {
+      g.currentTurnIndex = (g.currentTurnIndex + 1) % g.players.size();
+    } while (g.players.get(g.currentTurnIndex).mainActionCompletedThisRound);
+    startPlayerTurn(g, g.players.get(g.currentTurnIndex));
+    g.phase = GamePhase.PLAYER_TURNS;
+    e.add(event("PLAYER_TURN_STARTED", "playerId", g.players.get(g.currentTurnIndex).id));
   }
 
   private void endRound(GameState g, List<DomainEvent> e) {
@@ -775,6 +1169,11 @@ public final class DefaultGameEngine implements GameEngine {
                 m.targetPlayerId(),
                 m.tier()));
     for (PlayerState p : g.players) {
+      p.basicActionPoints = 3;
+      p.mainActionCompletedThisRound = false;
+      p.selectedAction = null;
+      p.actionLocked = false;
+      resetTurnDiscounts(p);
       p.hero =
           new HeroState(
               p.hero.heroClass(),
@@ -788,9 +1187,11 @@ public final class DefaultGameEngine implements GameEngine {
       p.units =
           p.units.stream().map(u -> u.garrison() ? u : new FatigueResolver().recover(u)).toList();
     }
+    g.actionTurnOrder.clear();
+    g.actionTurnOrderIndex = 0;
     g.roundNumber++;
     g.firstPlayerIndex = (g.firstPlayerIndex + 1) % g.players.size();
-    g.phase = GamePhase.WORLD;
+    g.phase = GamePhase.WORLD_ROLL;
     e.add(event("ROUND_STARTED", "round", g.roundNumber));
   }
 
@@ -828,9 +1229,11 @@ public final class DefaultGameEngine implements GameEngine {
                   p.hero.location(),
                   p.hero.defeated());
       case "ADVANCE_PHASE" -> {
-        if (g.phase == GamePhase.WORLD) g.phase = GamePhase.MARKET;
-        else if (g.phase == GamePhase.MARKET) g.phase = GamePhase.PLANNING;
-        else if (g.phase == GamePhase.PLANNING) g.phase = GamePhase.RESOLUTION;
+        if (g.phase == GamePhase.WORLD_ROLL) g.phase = GamePhase.NEGOTIATION;
+        else if (g.phase == GamePhase.PRODUCTION) g.phase = GamePhase.NEGOTIATION;
+        else if (g.phase == GamePhase.NEGOTIATION) g.phase = GamePhase.ACTION_CARD_SELECTION;
+        else if (g.phase == GamePhase.ACTION_CARD_SELECTION) g.phase = GamePhase.ACTION_CARD_REVEAL;
+        else if (g.phase == GamePhase.ACTION_CARD_REVEAL) g.phase = GamePhase.PLAYER_TURNS;
         else g.phase = GamePhase.END_ROUND;
       }
       default -> throw DomainException.of("INVALID_DEBUG_COMMAND", "Unsupported debug operation");

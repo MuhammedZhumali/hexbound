@@ -13,6 +13,8 @@ public sealed interface GameCommand
         GameCommand.ConfirmHero,
         GameCommand.CancelHeroSelection,
         GameCommand.StartStartingPlacement,
+        GameCommand.PlaceStartingOutpost,
+        GameCommand.PlaceStartingRoad,
         GameCommand.ProposeHeroSwap,
         GameCommand.AcceptHeroSwap,
         GameCommand.RollWorld,
@@ -22,6 +24,11 @@ public sealed interface GameCommand
         GameCommand.BuildOutpost,
         GameCommand.Recruit,
         GameCommand.Trade,
+        GameCommand.BankTrade,
+        GameCommand.ProposeTrade,
+        GameCommand.AcceptTrade,
+        GameCommand.RejectTrade,
+        GameCommand.CancelTrade,
         GameCommand.Explore,
         GameCommand.MoveHero,
         GameCommand.Attack,
@@ -42,6 +49,10 @@ public sealed interface GameCommand
 
   record StartStartingPlacement() implements GameCommand {}
 
+  record PlaceStartingOutpost(HexCoordinate at) implements GameCommand {}
+
+  record PlaceStartingRoad(HexCoordinate to) implements GameCommand {}
+
   record ProposeHeroSwap(UUID targetPlayerId) implements GameCommand {}
 
   record AcceptHeroSwap(UUID proposalId) implements GameCommand {}
@@ -59,6 +70,21 @@ public sealed interface GameCommand
   record Recruit(UnitType unitType) implements GameCommand {}
 
   record Trade(ResourceType give, ResourceType receive) implements GameCommand {}
+
+  record BankTrade(ResourceType give, ResourceType receive) implements GameCommand {}
+
+  record ProposeTrade(
+      UUID targetPlayerId,
+      Resources offeredResources,
+      Resources requestedResources,
+      int offeredGold,
+      int requestedGold) implements GameCommand {}
+
+  record AcceptTrade(UUID proposalId) implements GameCommand {}
+
+  record RejectTrade(UUID proposalId) implements GameCommand {}
+
+  record CancelTrade(UUID proposalId) implements GameCommand {}
 
   record Explore(HexCoordinate target) implements GameCommand {}
 

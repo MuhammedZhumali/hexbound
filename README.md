@@ -60,9 +60,10 @@ Flyway creates `games` (UUID, seed, status, phase, round, optimistic version, JS
 ## Implemented vertical slice
 
 - Seeded 37-hex (4/5/6/7/6/5/4) axial map with exact terrain and number-token counts, a central Ancient Capital, separated ruins, distributed villages, inner/middle-ring lair, connected topology, and non-adjacent 6/8 tokens.
-- Lobby, 3–4 hero selection, starting Outpost/Road/Hero/Militia, rotating first player, explicit phases, backend 2d6 and d20 RNG, and debug forced rolls.
+- Lobby, 3–4 hero selection, backend-validated manual snake-order Outpost/Road placement, rotating first player, explicit phases, backend 2d6 and d20 RNG, and debug forced rolls.
 - Simultaneous production, City output rule, Merchant’s single adjacent-number activation, and monster production blocking.
-- Private planning, action cooldown, reveal and fixed action categories; backend-authoritative Road/Outpost construction, recruitment, Fortify, hero movement, and d20 attacks.
+- Open player-to-player resource/gold proposals with atomic acceptance, 4:1 fallback bank trades, two Basic Action Points, sequential player turns, action cooldown, and stronger Main Action categories.
+- Terrain-wide exploration with Ranger range benefits and typed outcomes for wilderness, villages, Trade Lands, Monster Lairs, Ruins, and the Capital.
 - Unit power conversion capped at +6, fatigue/exhaustion, garrison-only passive defense, Shield/Counterattack/Evacuation/Ambush reaction math, natural 1/20, monster damage/rewards, and escalating unresolved monsters.
 - Glory categories, all five seal evaluators, final-round qualification, event history, typed errors, optimistic locking, idempotency, public/private DTOs, and live state refresh.
 - Twenty backend-owned text cards and a five-card market presentation.
@@ -125,7 +126,7 @@ Open `http://localhost:5173`. The setup screen creates a seeded four-player lobb
 
 ## Current limitations
 
-This is a deliberately compact vertical slice rather than the complete long-form board game. Trade, Explore, village contribution/quest/diplomacy/conquest, card purchase/effect execution, formal monster assistance contracts, settlement upgrades, damage allocation, mercenary renewal, and every debug mutation have domain-ready state but only pass-style or reference-data UI in this slice. Combat currently resolves a single adjacent army against a monster; expanded player settlement damage/capture and negotiated defender allocation are the next gameplay increment. There is no authentication, matchmaking, AI, or final artwork.
+This is a deliberately compact vertical slice rather than the complete long-form board game. Temporary access rights, promises, and assistance agreements are not yet executable trade assets; exploration outcomes are typed prototype rewards rather than full quest/event chains. Village contribution/quest/diplomacy/conquest, card effect execution, formal monster assistance contracts, settlement upgrades, damage allocation, mercenary renewal, and every debug mutation remain incomplete. Combat currently resolves a single adjacent army against a monster; expanded player settlement damage/capture and negotiated defender allocation are the next gameplay increment. There is no authentication, matchmaking, AI, or final artwork.
 
 ## Screenshots
 
@@ -141,6 +142,6 @@ Add release screenshots here after running the Docker stack:
 1. Complete village approaches, Loyalty events, promises, and formal assistance reward enforcement.
 2. Add market purchase/card timing and private reaction selection endpoints.
 3. Expand combat into declaration, defensive response, allocation, retreat, capture, and hero recovery substates.
-4. Implement settlement upgrades/buildings, inter-player trade offers, quests, artifact inventory, and full seal progression sources.
+4. Implement settlement upgrades/buildings, richer negotiated trade assets, quests, artifact inventory, and full seal progression sources.
 5. Add PostgreSQL/Testcontainers API tests and Playwright multi-seat plus forced-7 flows in CI.
 6. Improve accessibility, responsive board controls, reconnection backoff, and original iconography.
