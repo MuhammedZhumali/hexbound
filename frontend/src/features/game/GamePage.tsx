@@ -10,8 +10,25 @@ import { PlayerPanel, RealmPanel } from '../../components/panels/Panels';
 import { ActionButton } from '../../components/actions/ActionButton';
 import { BankTradePanel, PendingTradesPanel } from '../../components/trade/TradePanels';
 import { useUi } from '../../store/ui';
-import type { Coord, Game, HeroDraft, PrivateView, Resources, Seat } from '../../types/game';
+import type {
+  Coord,
+  Game,
+  HeroDraft,
+  LegalAction,
+  PrivateView,
+  Resources,
+  Seat,
+  TargetType,
+} from '../../types/game';
 import type { GuidanceLevel } from '../../components/guidance/Guidance';
+
+type TargetingMode = {
+  actionType: string;
+  targetType: TargetType;
+  validTargetHexIds: string[];
+  validTargetUnitIds: string[];
+  instruction: string;
+};
 
 const ACTIONS = [
   {
@@ -161,8 +178,8 @@ export function GamePage() {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [rolling, setRolling] = useState(false);
   const [error, setError] = useState('');
-  const [reaction, setReaction] = useState('SHIELD');
   const [invalidSelectionReason, setInvalidSelectionReason] = useState('');
+  const [targetingMode, setTargetingMode] = useState<TargetingMode>();
   const [guidanceLevel, setGuidanceLevel] = useState<GuidanceLevel>(() => {
     const stored = localStorage.getItem('hexbound:guidance');
     return stored === 'NORMAL' || stored === 'EXPERT' ? stored : 'BEGINNER';
@@ -269,6 +286,18 @@ export function GamePage() {
         }
       }
 
+      if (updatedGame.phase === 'WAITING_FOR_DEFENDER_REACTION' && updatedGame.pendingConflict) {
+        const defenderSeat = seats.find(
+          (candidate) => candidate.playerId === updatedGame.pendingConflict?.defenderPlayerId,
+        );
+        if (defenderSeat && defenderSeat.playerId !== seat?.playerId) {
+          setView(undefined);
+          setSeat(undefined);
+          setHandover(defenderSeat);
+          return;
+        }
+      }
+
       if (updatedGame.phase === 'PLAYER_TURNS' && updatedGame.currentTurnPlayerId) {
         const nextSeat = seats.find(
           (candidate) => candidate.playerId === updatedGame.currentTurnPlayerId,
@@ -324,6 +353,7 @@ export function GamePage() {
 
   function send(type: string, payload?: unknown) {
     if (type === 'ROLL_WORLD') setRolling(true);
+    setTargetingMode(undefined);
     mutation.mutate({ type, payload });
   }
 
@@ -341,13 +371,15 @@ export function GamePage() {
           nextResolver?.id ??
           game.firstPlayerId),
     ) ?? current;
-  const legalTargets = [
-    ...(legalQuery.data?.buildTargets ?? []),
-    ...(game.phase === 'STARTING_PLACEMENT' ? legalQuery.data?.movementTargets ?? [] : []),
-    ...(game.phase === 'PLAYER_TURNS' || game.phase === 'RESOLUTION'
-      ? legalQuery.data?.movementTargets ?? []
-      : []),
-  ];
+  const legalTargets = targetingMode
+    ? targetingMode.validTargetHexIds
+    : [
+        ...(legalQuery.data?.buildTargets ?? []),
+        ...(game.phase === 'STARTING_PLACEMENT' ? legalQuery.data?.movementTargets ?? [] : []),
+        ...(game.phase === 'PLAYER_TURNS' || game.phase === 'RESOLUTION'
+          ? legalQuery.data?.movementTargets ?? []
+          : []),
+      ];
 
   return (
     <main className="game">
@@ -403,6 +435,7 @@ export function GamePage() {
         <Board
           game={game}
           legal={legalTargets}
+          overlayType={targetingMode?.actionType ?? targetingMode?.targetType}
           explainInvalid={(hex) => setInvalidSelectionReason(invalidHexReason(game, hex.terrain))}
         />
       </section>
@@ -451,13 +484,14 @@ export function GamePage() {
             view={view}
             selected={selected}
             legalActions={legalQuery.data?.actions}
+            availableActions={legalQuery.data?.availableActions ?? []}
             legalBuildTargets={legalQuery.data?.buildTargets ?? []}
             legalMovementTargets={legalQuery.data?.movementTargets ?? []}
+            targetingMode={targetingMode}
+            setTargetingMode={setTargetingMode}
             heroDraft={heroDraftQuery.data}
             send={send}
             busy={mutation.isPending}
-            reaction={reaction}
-            setReaction={setReaction}
             guidanceLevel={guidanceLevel}
             currentName={current?.displayName}
             canResolve={!nextResolver || nextResolver.id === view?.playerId}
@@ -541,18 +575,193 @@ function CombatScene({ game }: { game: Game }) {
   );
 }
 
+export function AvailableActionsPanel({
+  actions,
+  activeCard,
+  busy,
+  currentName,
+  offerType,
+  requestType,
+  selected,
+  setOfferType,
+  setRequestType,
+  setTargetingMode,
+  targetingMode,
+  view,
+  game,
+  send,
+}: {
+  actions: LegalAction[];
+  activeCard: string;
+  busy: boolean;
+  currentName?: string;
+  offerType: keyof Resources;
+  requestType: keyof Resources;
+  selected?: Coord;
+  setOfferType: (resource: keyof Resources) => void;
+  setRequestType: (resource: keyof Resources) => void;
+  setTargetingMode?: (mode?: TargetingMode) => void;
+  targetingMode?: TargetingMode;
+  view: PrivateView;
+  game: Game;
+  send: (type: string, payload?: unknown) => void;
+}) {
+  const selectedId = selected ? `${selected.q},${selected.r}` : '';
+  const activeTargetAction = actions.find((action) => action.actionType === targetingMode?.actionType);
+  const selectedValid = Boolean(
+    activeTargetAction && selectedId && activeTargetAction.validTargetHexIds.includes(selectedId),
+  );
+  const grouped = groupActions(actions);
+
+  return (
+    <div className="available-actions-panel">
+      <header>
+        <div>
+          <p className="eyebrow">Available Actions</p>
+          <h3>
+            {currentName} Turn · {activeCard} card · Action Points: {view.basicActionPoints} / 3
+          </h3>
+        </div>
+        {view.basicActionPoints === 0 && <span className="ap-empty">End Turn recommended</span>}
+      </header>
+
+      {targetingMode && activeTargetAction && (
+        <section className="targeting-confirm">
+          <div>
+            <b>{targetingMode.instruction}</b>
+            <span>
+              {selectedValid
+                ? `Selected target ${selectedId}. Confirm to resolve on the server.`
+                : 'Valid targets are highlighted on the board.'}
+            </span>
+          </div>
+          {isAttackAction(activeTargetAction.actionType) && (
+            <AttackPreviewCard
+              selected={selected}
+              view={view}
+            />
+          )}
+          <button disabled={busy || !selectedValid} onClick={() => sendAction(activeTargetAction)}>
+            Confirm {activeTargetAction.label}
+          </button>
+          <button className="quiet-button" onClick={() => setTargetingMode?.(undefined)}>
+            Cancel
+          </button>
+        </section>
+      )}
+
+      <div className="action-groups">
+        {Object.entries(grouped).map(([group, items]) => (
+          <section className="action-group" key={group}>
+            <h4>{group}</h4>
+            <div className="action-list">
+              {items.map((action) => (
+                <button
+                  key={action.actionType}
+                  className={`available-action ${action.available ? '' : 'disabled'}`}
+                  disabled={busy || !action.available}
+                  onClick={() => {
+                    if (action.requiresTarget) {
+                      setTargetingMode?.({
+                        actionType: action.actionType,
+                        targetType: action.targetType,
+                        validTargetHexIds: action.validTargetHexIds,
+                        validTargetUnitIds: action.validTargetUnitIds,
+                        instruction: targetingInstruction(action),
+                      });
+                    } else {
+                      sendAction(action);
+                    }
+                  }}
+                >
+                  <span>
+                    <b>{action.label}</b>
+                    <small>{action.description}</small>
+                    {!action.available && action.disabledReason && (
+                      <em>Disabled: {action.disabledReason}</em>
+                    )}
+                  </span>
+                  <strong>{action.available ? `${action.apCost} AP` : 'Unavailable'}</strong>
+                  {resourceCostText(action) && <i>{resourceCostText(action)}</i>}
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+
+  function sendAction(action: LegalAction) {
+    const target = selected;
+    const tradePayload = { give: offerType.toUpperCase(), receive: requestType.toUpperCase() };
+    switch (action.actionType) {
+      case 'MOVE_HERO':
+      case 'SWIFT_MOVE':
+        send(action.actionType, { to: target });
+        return;
+      case 'BUILD_ROAD':
+      case 'QUICK_ROAD': {
+        const from = preferredRoadSource(view, target);
+        send(action.actionType, { from, to: target });
+        return;
+      }
+      case 'BUILD_OUTPOST':
+        send('BUILD_OUTPOST', { at: target });
+        return;
+      case 'EXPLORE_HEX':
+      case 'DEEP_EXPLORE':
+      case 'SMALL_RAID':
+        send(action.actionType, { target });
+        return;
+      case 'FULL_ATTACK':
+        send(action.actionType, { target });
+        return;
+      case 'PRIEST_HEAL':
+      case 'PRIEST_BLESS':
+      case 'PRIEST_SANCTUARY':
+      case 'ARCANE_BOLT':
+      case 'MAGE_WARD':
+      case 'MAGE_REVEAL':
+      case 'SCOUT':
+      case 'REPAIR':
+        send(action.actionType, { target });
+        return;
+      case 'RECRUIT':
+        send('RECRUIT', { unitType: 'MILITIA' });
+        return;
+      case 'BANK_TRADE':
+      case 'MARKET_DEAL':
+      case 'TRANSMUTE':
+        send(action.actionType, tradePayload);
+        return;
+      case 'BUY_MARKET_CARD': {
+        const firstAffordable = game.market.find((card) => covers(view.resources, card.cost)) ?? game.market[0];
+        if (firstAffordable) send('BUY_MARKET_CARD', { cardId: firstAffordable.id });
+        return;
+      }
+      case 'END_PLAYER_TURN':
+        send('END_PLAYER_TURN');
+        return;
+      default:
+        send(action.actionType, target ? { target } : undefined);
+    }
+  }
+}
+
 export function PhaseControls({
   game,
   view,
   selected,
   legalActions,
+  availableActions = [],
   legalBuildTargets,
   legalMovementTargets = [],
+  targetingMode,
+  setTargetingMode,
   heroDraft,
   send,
   busy,
-  reaction,
-  setReaction,
   guidanceLevel = 'BEGINNER',
   currentName,
   canResolve,
@@ -562,13 +771,14 @@ export function PhaseControls({
   view?: PrivateView;
   selected?: Coord;
   legalActions?: string[];
+  availableActions?: LegalAction[];
   legalBuildTargets: string[];
   legalMovementTargets?: string[];
+  targetingMode?: TargetingMode;
+  setTargetingMode?: (mode?: TargetingMode) => void;
   heroDraft?: HeroDraft;
   send: (type: string, payload?: unknown) => void;
   busy: boolean;
-  reaction: string;
-  setReaction: (reaction: string) => void;
   guidanceLevel?: GuidanceLevel;
   currentName?: string;
   canResolve: boolean;
@@ -586,6 +796,59 @@ export function PhaseControls({
   useEffect(() => setDraftAction(undefined), [view?.playerId, game.phase, view?.selectedAction]);
 
   if (!view) return null;
+
+  if (game.phase === 'WAITING_FOR_DEFENDER_REACTION') {
+    const conflict = game.pendingConflict;
+    const attacker = game.players.find((player) => player.id === conflict?.attackerPlayerId);
+    const defender = game.players.find((player) => player.id === conflict?.defenderPlayerId);
+    const isDefender = conflict?.defenderPlayerId === view.playerId;
+    if (!conflict) {
+      return <div className="waiting-turn">Waiting for conflict data…</div>;
+    }
+    if (!isDefender) {
+      return (
+        <div className="waiting-turn defender-wait">
+          <span>🛡</span>
+          <div>
+            <b>Pass the device to {defender?.displayName ?? 'the defending player'}</b>
+            <p>
+              {attacker?.displayName ?? 'The attacker'} declared {conflict.attackType.replace('_', ' ')} at{' '}
+              {conflict.target.q},{conflict.target.r}. Defender reaction is private.
+            </p>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="defender-reaction-panel">
+        <p className="eyebrow">Private Defender Reaction</p>
+        <h3>{defender?.displayName}, choose your response</h3>
+        <p>
+          {attacker?.displayName ?? 'Attacker'} declared {conflict.attackType.replace('_', ' ')} at{' '}
+          {conflict.target.q},{conflict.target.r}. Pick one reaction; then the server will roll and reveal
+          the conflict result.
+        </p>
+        <div className="reaction-grid">
+          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', { reaction: 'SHIELD' })}>
+            <b>Shield</b>
+            <span>Reduce or block incoming damage/resource loss.</span>
+          </button>
+          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', { reaction: 'COUNTERATTACK' })}>
+            <b>Counterattack</b>
+            <span>Riskier response; can punish a failed attack.</span>
+          </button>
+          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', { reaction: 'EVACUATION' })}>
+            <b>Evacuation</b>
+            <span>Avoid the worst effect but lose a smaller guaranteed amount.</span>
+          </button>
+          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', { reaction: 'NONE' })}>
+            <b>No Reaction</b>
+            <span>Accept the attack and conserve defenses.</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (game.phase === 'STARTING_PLACEMENT') {
     if (game.status !== 'ACTIVE') {
@@ -799,25 +1062,22 @@ export function PhaseControls({
         const activeCard = view.selectedAction ?? 'No card';
         return (
           <div className="planning-layout">
-            <div className="resolution-card">
-              <h3>{currentName} Turn · {activeCard} card active · AP {view.basicActionPoints}/3</h3>
-              <p>Spend up to 3 Action Points. The revealed card changes costs for this turn.</p>
-              <button disabled={busy || view.basicActionPoints < 1 || !selected} onClick={() => send('MOVE_HERO', { to: selected })}>Move Hero · 1 AP</button>
-              <button disabled={busy || !selected} onClick={() => send('EXPLORE', { target: selected })}>Explore Hex · {view.selectedAction === 'EXPLORE' ? '0/1' : '1'} AP</button>
-              <button disabled={busy || view.resources.food < 1} onClick={() => send('RECRUIT', { unitType: 'MILITIA' })}>Recruit Militia · {view.selectedAction === 'RECRUIT' ? '0/1' : '1'} AP</button>
-              <button disabled={busy || !selected} onClick={() => {
-                const from = view.roads.flatMap((road) => [road.from, road.to]).find((coordinate) =>
-                  Math.max(Math.abs(coordinate.q - selected!.q), Math.abs(coordinate.r - selected!.r)) <= 1) ?? view.settlements[0]?.location;
-                send('BUILD_ROAD', { from, to: selected });
-              }}>Build Road · {view.selectedAction === 'BUILD' ? '0/1' : '1'} AP</button>
-              <label>Bank Trade · 1 AP<select value={offerType} onChange={(event) => setOfferType(event.target.value as keyof Resources)}>{resourceOptions()}</select>
-                <select value={requestType} onChange={(event) => setRequestType(event.target.value as keyof Resources)}>{resourceOptions()}</select></label>
-              <button disabled={busy || view.basicActionPoints < 1 || offerType === requestType || view.resources[offerType] < (view.selectedAction === 'TRADE' ? 3 : 4)}
-                onClick={() => send('BANK_TRADE', { give: offerType.toUpperCase(), receive: requestType.toUpperCase() })}>Trade with bank · 1 AP</button>
-              <button className="primary" disabled={busy} onClick={() => send('END_PLAYER_TURN')}>
-                End Player Turn
-              </button>
-            </div>
+            <AvailableActionsPanel
+              actions={availableActions}
+              activeCard={activeCard}
+              busy={busy}
+              currentName={currentName}
+              offerType={offerType}
+              requestType={requestType}
+              selected={selected}
+              setOfferType={setOfferType}
+              setRequestType={setRequestType}
+              setTargetingMode={setTargetingMode}
+              targetingMode={targetingMode}
+              view={view}
+              game={game}
+              send={send}
+            />
           </div>
         );
       }
@@ -923,8 +1183,6 @@ export function PhaseControls({
           legalBuildTargets={legalBuildTargets}
           send={send}
           disabled={busy}
-          reaction={reaction}
-          setReaction={setReaction}
         />
       );
 
@@ -1063,8 +1321,6 @@ function Resolution({
   legalBuildTargets,
   send,
   disabled,
-  reaction,
-  setReaction,
 }: {
   game: Game;
   view: PrivateView;
@@ -1072,8 +1328,6 @@ function Resolution({
   legalBuildTargets: string[];
   send: (type: string, payload?: unknown) => void;
   disabled: boolean;
-  reaction: string;
-  setReaction: (reaction: string) => void;
 }) {
   const [give, setGive] = useState<keyof Resources>('wood');
   const [receive, setReceive] = useState<keyof Resources>('gold');
@@ -1222,16 +1476,7 @@ function Resolution({
         <button
           disabled={disabled || !selected}
           onClick={() => {
-            const from =
-              view.roads
-                .flatMap((road) => [road.from, road.to])
-                .find(
-                  (coordinate) =>
-                    Math.max(
-                      Math.abs(coordinate.q - selected!.q),
-                      Math.abs(coordinate.r - selected!.r),
-                    ) <= 1,
-                ) ?? view.settlements[0]?.location;
+            const from = preferredRoadSource(view, selected);
             send('BUILD_ROAD', { from, to: selected });
           }}
         >
@@ -1380,6 +1625,24 @@ function covers(resources: Resources, cost: Resources) {
   );
 }
 
+function preferredRoadSource(view: PrivateView, target?: Coord) {
+  if (!target) return view.settlements[0]?.location;
+  const settlementSource = view.settlements
+    .map((settlement) => settlement.location)
+    .find((coordinate) => hexDistance(coordinate, target) === 1);
+  if (settlementSource) return settlementSource;
+  return (
+    view.roads
+      .flatMap((road) => [road.from, road.to])
+      .find((coordinate) => hexDistance(coordinate, target) === 1) ?? view.settlements[0]?.location
+  );
+}
+
+function hexDistance(a: Coord, b: Coord) {
+  const ds = -a.q - a.r - (-b.q - b.r);
+  return (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(ds)) / 2;
+}
+
 function mainActionCost(action: string) {
   const costs: Record<string, string> = {
     EXPLORE: 'Card bonus: first explore costs 0 AP',
@@ -1390,6 +1653,75 @@ function mainActionCost(action: string) {
     ATTACK: 'Card bonus: first attack costs 1 AP',
   };
   return costs[action] ?? '3 AP turn, backend validated';
+}
+
+function AttackPreviewCard({
+  selected,
+  view,
+}: {
+  selected?: Coord;
+  view: PrivateView;
+}) {
+  const hero = view.hero;
+  const heroBonus = hero?.heroClass === 'KNIGHT' ? 2 : hero?.heroClass === 'MAGE' ? 2 : 0;
+  const readyUnits = view.units.filter((unit) => unit.fatigue !== 'EXHAUSTED' && !unit.garrison);
+  const armyBonus = Math.min(6, readyUnits.length * 1);
+  const cardBonus = view.selectedAction === 'ATTACK' ? 1 : 0;
+  return (
+    <aside className="attack-preview-card" aria-label="Attack Preview">
+      <b>Attack Preview</b>
+      <span>Target: {selected ? `${selected.q},${selected.r}` : 'choose a highlighted target'}</span>
+      <span>Hero: {hero?.heroClass ?? 'none'} · Hero Bonus: +{heroBonus}</span>
+      <span>Units: {readyUnits.length} ready · Army Bonus: +{armyBonus}</span>
+      <span>Action Card Bonus: +{cardBonus}</span>
+      <span>Base Defense: 10 · defender reaction stays hidden until resolution</span>
+    </aside>
+  );
+}
+
+function isAttackAction(actionType: string) {
+  return actionType.includes('ATTACK') || actionType.includes('RAID') || actionType === 'ARCANE_BOLT';
+}
+
+function groupActions(actions: LegalAction[]) {
+  const order = ['Movement', 'Building', 'Trading', 'Exploration', 'Combat', 'Hero Skills', 'Cards', 'Turn'];
+  const grouped = Object.fromEntries(order.map((group) => [group, [] as LegalAction[]]));
+  for (const action of actions) {
+    grouped[actionGroup(action.actionType)].push(action);
+  }
+  return Object.fromEntries(Object.entries(grouped).filter(([, items]) => items.length > 0));
+}
+
+function actionGroup(actionType: string) {
+  if (actionType.includes('MOVE')) return 'Movement';
+  if (actionType.includes('BUILD') || actionType.includes('ROAD') || actionType === 'REPAIR') return 'Building';
+  if (actionType.includes('TRADE') || actionType.includes('DEAL') || actionType === 'TRANSMUTE') return 'Trading';
+  if (actionType.includes('EXPLORE') || actionType === 'SCOUT' || actionType === 'MAGE_REVEAL') return 'Exploration';
+  if (actionType.includes('ATTACK') || actionType.includes('RAID') || actionType === 'ARCANE_BOLT' || actionType === 'CHALLENGE') return 'Combat';
+  if (actionType.startsWith('PRIEST') || actionType.startsWith('MAGE') || actionType === 'SWIFT_MOVE' || actionType === 'QUICK_ROAD') return 'Hero Skills';
+  if (actionType.includes('CARD')) return 'Cards';
+  if (actionType.includes('END')) return 'Turn';
+  return 'Cards';
+}
+
+function resourceCostText(action: LegalAction) {
+  return Object.entries(action.resourceCost ?? {})
+    .filter(([, amount]) => Number(amount) > 0)
+    .map(([name, amount]) => `${amount} ${name}`)
+    .join(' · ');
+}
+
+function targetingInstruction(action: LegalAction) {
+  if (action.actionType.includes('ATTACK') || action.actionType.includes('RAID') || action.actionType === 'ARCANE_BOLT') {
+    return `Choose a target to ${action.label}.`;
+  }
+  if (action.actionType.includes('HEAL') || action.actionType.includes('BLESS') || action.actionType.includes('WARD')) {
+    return `Choose a friendly target for ${action.label}.`;
+  }
+  if (action.actionType.includes('BUILD') || action.actionType.includes('ROAD')) {
+    return `Choose a build target for ${action.label}.`;
+  }
+  return `Choose a hex to ${action.label}.`;
 }
 
 function invalidHexReason(game: Game, terrain: string) {

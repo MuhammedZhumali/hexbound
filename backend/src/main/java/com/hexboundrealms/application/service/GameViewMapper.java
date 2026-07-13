@@ -75,21 +75,37 @@ public final class GameViewMapper {
         first,
         g.startingPlacementStep,
         placementPlayer,
-        g.phase == GamePhase.PLAYER_TURNS && !g.players.isEmpty()
-            ? (!g.actionTurnOrder.isEmpty() && g.actionTurnOrderIndex < g.actionTurnOrder.size()
-                ? g.actionTurnOrder.get(g.actionTurnOrderIndex)
-                : g.players.get(g.currentTurnIndex).id)
-            : null,
+        currentTurnPlayerId(g),
+        g.pendingConflict == null
+            ? null
+            : new PendingConflictView(
+                g.pendingConflict.conflictId(),
+                g.pendingConflict.attackerPlayerId(),
+                g.pendingConflict.defenderPlayerId(),
+                g.pendingConflict.target(),
+                g.pendingConflict.attackType()),
         List.copyOf(g.map),
         players,
         List.copyOf(g.monsters),
         List.copyOf(g.market),
         List.copyOf(g.tradeProposals),
-        List.copyOf(g.explorationResults),
+        List.of(),
         List.copyOf(g.eventLog),
         List.copyOf(g.winners),
         attackPlans,
         g.lastCombatReport == null ? List.of() : List.copyOf(g.lastCombatReport));
+  }
+
+  private UUID currentTurnPlayerId(GameState g) {
+    if (g.phase == GamePhase.WAITING_FOR_DEFENDER_REACTION && g.pendingConflict != null) {
+      return g.pendingConflict.defenderPlayerId();
+    }
+    if (g.phase == GamePhase.PLAYER_TURNS && !g.players.isEmpty()) {
+      return !g.actionTurnOrder.isEmpty() && g.actionTurnOrderIndex < g.actionTurnOrder.size()
+          ? g.actionTurnOrder.get(g.actionTurnOrderIndex)
+          : g.players.get(g.currentTurnIndex).id;
+    }
+    return null;
   }
 
   public PrivatePlayerView privateView(GameState g, PlayerState p) {
@@ -110,6 +126,9 @@ public final class GameViewMapper {
         List.copyOf(p.units),
         List.copyOf(p.hand),
         seals.active(g, p),
+        g.explorationResults.stream()
+            .filter(result -> result.playerId().equals(p.id))
+            .toList(),
         p.temporaryHeroClass,
         p.attackPlan);
   }

@@ -27,6 +27,7 @@ public final class GameModel {
     ACTION_CARD_SELECTION,
     ACTION_CARD_REVEAL,
     PLAYER_TURNS,
+    WAITING_FOR_DEFENDER_REACTION,
     MARKET,
     PLANNING,
     REVEAL,
@@ -111,10 +112,16 @@ public final class GameModel {
   }
 
   public enum ReactionType {
+    NONE,
     SHIELD,
     COUNTERATTACK,
     EVACUATION,
     AMBUSH
+  }
+
+  public enum ConflictAttackType {
+    SMALL_RAID,
+    FULL_ATTACK
   }
 
   public enum PathSeal {
@@ -298,6 +305,16 @@ public final class GameModel {
       boolean requesterAccepted,
       boolean targetAccepted) {}
 
+  public record PendingConflict(
+      UUID conflictId,
+      UUID attackerPlayerId,
+      UUID defenderPlayerId,
+      HexCoordinate target,
+      ConflictAttackType attackType,
+      ActionType attackerActionCard,
+      ActionType defenderActionCard,
+      int apCost) {}
+
   public static final class PlayerState {
     public UUID id;
     public String displayName;
@@ -327,6 +344,12 @@ public final class GameModel {
     public boolean freeRoadUsed;
     public boolean freeMilitiaUsed;
     public boolean attackDiscountUsed;
+    public boolean swiftMoveUsed;
+    public boolean quickRoadUsed;
+    public boolean repairUsed;
+    public int blessTokens;
+    public int sanctuaryTokens;
+    public int wardTokens;
     public com.hexboundrealms.domain.combat.AttackPlan attackPlan;
 
     public PlayerState() {}
@@ -368,6 +391,7 @@ public final class GameModel {
     public List<HeroSwapProposal> heroSwapProposals = new ArrayList<>();
     public List<TradeProposal> tradeProposals = new ArrayList<>();
     public List<ExplorationResult> explorationResults = new ArrayList<>();
+    public PendingConflict pendingConflict;
     public Integer lastRoll;
     public Integer forced2d6;
     public Integer forcedD20;

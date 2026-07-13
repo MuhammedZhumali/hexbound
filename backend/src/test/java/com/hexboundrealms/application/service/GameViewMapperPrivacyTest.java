@@ -60,6 +60,26 @@ class GameViewMapperPrivacyTest {
     assertThat(mapper.publicView(game).revealedAttackPlans()).hasSize(2);
   }
 
+  @Test
+  void explorationDetailsArePrivateToOwningPlayer() {
+    GameState game = new GameState();
+    game.id = UUID.randomUUID();
+    PlayerState green = new PlayerState(UUID.randomUUID(), "Green", PlayerColor.GREEN, "token", HeroClass.RANGER);
+    PlayerState red = new PlayerState(UUID.randomUUID(), "Red", PlayerColor.RED, "token", HeroClass.MAGE);
+    game.players.addAll(List.of(green, red));
+    ExplorationResult secret =
+        new ExplorationResult(
+            green.id,
+            new HexCoordinate(-3, 3),
+            ExplorationResultType.TRADE_CONTACT,
+            "A caravan contact paid for information (+1 GOLD)");
+    game.explorationResults.add(secret);
+
+    assertThat(mapper.publicView(game).explorationResults()).isEmpty();
+    assertThat(mapper.privateView(game, green).privateExplorationResults()).containsExactly(secret);
+    assertThat(mapper.privateView(game, red).privateExplorationResults()).isEmpty();
+  }
+
   private PlayerState attacker(String name, PlayerColor color) {
     PlayerState player = new PlayerState(UUID.randomUUID(), name, color, "token", HeroClass.KNIGHT);
     player.actionLocked = true;

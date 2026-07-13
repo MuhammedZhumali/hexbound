@@ -48,13 +48,28 @@ public final class DefaultGameEngine implements GameEngine {
       case GameCommand.Recruit c -> recruit(game, player, c, events);
       case GameCommand.Trade c -> trade(game, player, c, events);
       case GameCommand.BankTrade c -> bankTrade(game, player, c, events);
+      case GameCommand.MarketDeal c -> marketDeal(game, player, c, events);
       case GameCommand.ProposeTrade c -> proposeTrade(game, player, c, events);
       case GameCommand.AcceptTrade c -> acceptTrade(game, player, c, events);
       case GameCommand.RejectTrade c -> closeTrade(game, player, c.proposalId(), TradeStatus.REJECTED, events);
       case GameCommand.CancelTrade c -> closeTrade(game, player, c.proposalId(), TradeStatus.CANCELLED, events);
       case GameCommand.Explore c -> explore(game, player, c, events);
+      case GameCommand.DeepExplore c -> deepExplore(game, player, c, events);
       case GameCommand.MoveHero c -> move(game, player, c, events);
+      case GameCommand.SwiftMove c -> swiftMove(game, player, c, events);
       case GameCommand.Attack c -> attack(game, player, c, events);
+      case GameCommand.SmallRaid c -> smallRaid(game, player, c, events);
+      case GameCommand.DefenderReaction c -> defenderReaction(game, player, c, events);
+      case GameCommand.PriestHeal c -> priestHeal(game, player, c, events);
+      case GameCommand.PriestBless c -> priestBless(game, player, c, events);
+      case GameCommand.PriestSanctuary c -> priestSanctuary(game, player, c, events);
+      case GameCommand.ArcaneBolt c -> arcaneBolt(game, player, c, events);
+      case GameCommand.MageWard c -> mageWard(game, player, c, events);
+      case GameCommand.MageReveal c -> mageReveal(game, player, c, events);
+      case GameCommand.Transmute c -> transmute(game, player, c, events);
+      case GameCommand.Scout c -> scout(game, player, c, events);
+      case GameCommand.QuickRoad c -> quickRoad(game, player, c, events);
+      case GameCommand.Repair c -> repair(game, player, c, events);
       case GameCommand.LockAttackPlan c -> lockAttackPlan(game, player, c, events);
       case GameCommand.ResolveAttackBatch ignored -> resolveAttackBatch(game, player, events);
       case GameCommand.Fortify ignored -> fortify(game, player, events);
@@ -69,7 +84,11 @@ public final class DefaultGameEngine implements GameEngine {
       game.status = GameStatus.FINISHED;
       events.add(event("GAME_OVER", "winners", game.winners));
     }
-    game.eventLog.addAll(events.stream().map(DomainEvent::type).toList());
+    game.eventLog.addAll(
+        events.stream()
+            .map(event -> publicLogMessage(game, event))
+            .filter(message -> message != null && !message.isBlank())
+            .toList());
     return new CommandResult(game, List.copyOf(events));
   }
 
@@ -384,7 +403,10 @@ public final class DefaultGameEngine implements GameEngine {
       throw DomainException.of("INVALID_TARGET", "Road must extend your connected network");
     p.resources = p.resources.subtract(cost);
     p.roads.add(new RoadState(UUID.randomUUID(), c.from(), c.to()));
-    if (turn) e.add(event("ROAD_BUILT", "playerId", p.id));
+    if (turn)
+      e.add(
+          new DomainEvent(
+              "ROAD_BUILT", Map.of("playerId", p.id, "from", c.from(), "to", c.to())));
     else finishAction(g, p, e, "ROAD_BUILT");
   }
 
@@ -400,7 +422,8 @@ public final class DefaultGameEngine implements GameEngine {
       throw DomainException.of("INVALID_TARGET", "Outpost target is not legal");
     p.resources = p.resources.subtract(cost);
     p.settlements.add(new SettlementState(UUID.randomUUID(), c.at(), SettlementLevel.OUTPOST, 2));
-    if (turn) e.add(event("OUTPOST_BUILT", "playerId", p.id));
+    if (turn)
+      e.add(new DomainEvent("OUTPOST_BUILT", Map.of("playerId", p.id, "at", c.at())));
     else finishAction(g, p, e, "OUTPOST_BUILT");
   }
 
@@ -427,7 +450,8 @@ public final class DefaultGameEngine implements GameEngine {
             false,
             false,
             c.unitType() == UnitType.MERCENARY ? g.roundNumber + 1 : 0));
-    if (turn) e.add(event("UNIT_RECRUITED", "playerId", p.id));
+    if (turn)
+      e.add(new DomainEvent("UNIT_RECRUITED", Map.of("playerId", p.id, "unitType", c.unitType())));
     else finishAction(g, p, e, "UNIT_RECRUITED");
   }
 
@@ -545,11 +569,66 @@ public final class DefaultGameEngine implements GameEngine {
     return resources.add(ResourceType.GOLD, gold);
   }
 
+  private int resourceAmount(Resources resources, ResourceType type) {
+    return switch (type) {
+      case WOOD -> resources.wood();
+      case FOOD -> resources.food();
+      case ORE -> resources.ore();
+      case STONE -> resources.stone();
+      case GOLD -> resources.gold();
+    };
+  }
+
   private void spendActionPoints(PlayerState p, int cost) {
     if (cost < 0) throw DomainException.of("INVALID_ACTION_COST", "Action Point cost cannot be negative");
     if (p.basicActionPoints < cost)
       throw DomainException.of("NO_ACTION_POINTS", "Not enough Action Points remain");
     p.basicActionPoints -= cost;
+  }
+
+  private void spendResources(PlayerState p, Resources cost) {
+    try {
+      p.resources = p.resources.subtract(cost);
+    } catch (IllegalArgumentException ex) {
+      throw DomainException.of("INSUFFICIENT_RESOURCES", "Not enough resources");
+    }
+  }
+
+  private void spendMana(PlayerState p, int amount) {
+    if (p.hero == null || p.hero.mana() < amount)
+      throw DomainException.of("INSUFFICIENT_MANA", "Not enough Mana");
+    p.hero =
+        new HeroState(
+            p.hero.heroClass(),
+            p.hero.hp(),
+            p.hero.mana() - amount,
+            p.hero.grace(),
+            p.hero.location(),
+            p.hero.defeated());
+  }
+
+  private void spendGrace(PlayerState p, int amount) {
+    if (p.hero == null || p.hero.grace() < amount)
+      throw DomainException.of("INSUFFICIENT_GRACE", "Not enough Grace");
+    p.hero =
+        new HeroState(
+            p.hero.heroClass(),
+            p.hero.hp(),
+            p.hero.mana(),
+            p.hero.grace() - amount,
+            p.hero.location(),
+            p.hero.defeated());
+  }
+
+  private void requireHero(PlayerState p, HeroClass heroClass) {
+    if (p.hero == null || p.hero.heroClass() != heroClass)
+      throw DomainException.of("INVALID_HERO", heroClass + " action is not available");
+  }
+
+  private void requireTurnAction(GameState g, PlayerState p) {
+    if (g.phase != GamePhase.PLAYER_TURNS)
+      throw DomainException.of("INVALID_PHASE", "Action must happen during player turns");
+    requireCurrentTurn(g, p);
   }
 
   private int roadActionPointCost(PlayerState p) {
@@ -578,19 +657,43 @@ public final class DefaultGameEngine implements GameEngine {
     return 1;
   }
 
+  private int deepExploreActionPointCost(PlayerState p) {
+    return p.selectedAction == ActionType.EXPLORE ? 1 : 2;
+  }
+
   private int attackActionPointCost(PlayerState p) {
+    return fullAttackActionPointCost(p);
+  }
+
+  private int fullAttackActionPointCost(PlayerState p) {
     if (p.selectedAction == ActionType.ATTACK && !p.attackDiscountUsed) {
-      p.attackDiscountUsed = true;
       return 1;
     }
     return 2;
   }
 
+  private void spendFullAttackActionPoints(PlayerState p) {
+    int cost = fullAttackActionPointCost(p);
+    spendActionPoints(p, cost);
+    if (p.selectedAction == ActionType.ATTACK && !p.attackDiscountUsed) {
+      p.attackDiscountUsed = true;
+    }
+  }
+
   private void explore(GameState g, PlayerState p, GameCommand.Explore c, List<DomainEvent> e) {
+    exploreHex(g, p, c.target(), false, e);
+  }
+
+  private void deepExplore(GameState g, PlayerState p, GameCommand.DeepExplore c, List<DomainEvent> e) {
+    exploreHex(g, p, c.target(), true, e);
+  }
+
+  private void exploreHex(
+      GameState g, PlayerState p, HexCoordinate targetCoordinate, boolean deep, List<DomainEvent> e) {
     boolean turn = g.phase == GamePhase.PLAYER_TURNS;
     if (turn) {
       requireCurrentTurn(g, p);
-      spendActionPoints(p, exploreActionPointCost(p));
+      spendActionPoints(p, deep ? deepExploreActionPointCost(p) : exploreActionPointCost(p));
     } else resolutionAction(g, p, ActionType.EXPLORE);
     if (p.hero.location() == null) {
       throw DomainException.of("INVALID_TARGET", "Hero is not on the map");
@@ -598,24 +701,29 @@ public final class DefaultGameEngine implements GameEngine {
     int range = p.hero.heroClass() == HeroClass.RANGER ? 2 : 1;
     MapHex target =
         g.map.stream()
-            .filter(h -> h.coordinate().equals(c.target()))
+            .filter(h -> h.coordinate().equals(targetCoordinate))
             .findFirst()
             .orElseThrow(() -> DomainException.of("INVALID_TARGET", "Unknown hex"));
-    if (p.hero.location().distanceTo(c.target()) > range)
+    if (p.hero.location().distanceTo(targetCoordinate) > range)
       throw DomainException.of("INVALID_TARGET", "Select a hex within Hero exploration range");
-    if (!p.exploredHexes.add(c.target()))
+    if (!p.exploredHexes.add(targetCoordinate))
       throw DomainException.of("INVALID_TARGET", "This hex was already explored by the Hero");
-    ExplorationResultType resultType = explorationType(target);
+    ExplorationResultType resultType = deep ? deepExplorationType(g, p, target) : explorationType(target);
+    String publicReward = "";
     if (resultType == ExplorationResultType.BONUS_RESOURCE) {
       ResourceType reward = target.resource() == null ? ResourceType.FOOD : target.resource();
-      p.resources = p.resources.add(reward, p.hero.heroClass() == HeroClass.RANGER ? 2 : 1);
+      int amount = deep || p.hero.heroClass() == HeroClass.RANGER ? 2 : 1;
+      p.resources = p.resources.add(reward, amount);
+      publicReward = "+" + amount + " " + reward.name();
     } else if (resultType == ExplorationResultType.TRADE_CONTACT) {
       p.resources = p.resources.add(ResourceType.GOLD, 1);
+      publicReward = "+1 GOLD";
     } else if (resultType == ExplorationResultType.ARTIFACT_CLUE) {
       p.resources = p.resources.add(ResourceType.GOLD, 1);
       p.reputation = Math.min(12, p.reputation + 1);
+      publicReward = "+1 GOLD, +1 Reputation";
     }
-    if (target.terrain() == TerrainType.RUIN) p.exploredRuins.add(c.target());
+    if (target.terrain() == TerrainType.RUIN) p.exploredRuins.add(targetCoordinate);
     SealProgress old = p.sealProgress;
     p.sealProgress =
         new SealProgress(
@@ -627,12 +735,26 @@ public final class DefaultGameEngine implements GameEngine {
             p.exploredRuins.size(),
             old.artifacts(),
             old.permanent());
-    ExplorationResult result = new ExplorationResult(p.id, c.target(), resultType, explorationDescription(target));
+    ExplorationResult result =
+        new ExplorationResult(
+            p.id,
+            targetCoordinate,
+            resultType,
+            (deep ? "Deep Explore: " : "") + explorationDescription(resultType, target, publicReward));
     g.explorationResults.add(result);
     e.add(
         new DomainEvent(
-            "HEX_EXPLORED", Map.of("playerId", p.id, "target", c.target(), "result", resultType)));
-    if (turn) e.add(event("HEX_EXPLORED_BY_ACTION_POINT", "playerId", p.id));
+            deep ? "DEEP_EXPLORE_RESOLVED" : "HEX_EXPLORED",
+            Map.of(
+                "playerId",
+                p.id,
+                "target",
+                targetCoordinate,
+                "result",
+                resultType,
+                "publicReward",
+                publicReward)));
+    if (turn) e.add(event(deep ? "DEEP_EXPLORE_BY_ACTION_POINT" : "HEX_EXPLORED_BY_ACTION_POINT", "playerId", p.id));
     else finishAction(g, p, e, "EXPLORE_RESOLVED");
   }
 
@@ -646,15 +768,38 @@ public final class DefaultGameEngine implements GameEngine {
     };
   }
 
-  private String explorationDescription(MapHex target) {
-    return switch (target.terrain()) {
-      case FOREST -> "A hidden trail and useful woodland supplies";
-      case FIELD -> "A concealed cache in the wilderness";
-      case MOUNTAIN, QUARRY -> "A promising mineral deposit";
-      case TRADE_LAND -> "A new caravan contact";
-      case VILLAGE -> "A local request for assistance";
-      case MONSTER_LAIR -> "Clues about the resident monster";
-      case RUIN, ANCIENT_CAPITAL -> "Signs of a buried artifact";
+  private ExplorationResultType deepExplorationType(GameState g, PlayerState p, MapHex target) {
+    int quality = (int) Math.floorMod(g.seed + g.rngCounter++ + target.coordinate().q() * 31L
+        + target.coordinate().r() * 17L, 10);
+    if (p.hero.heroClass() == HeroClass.RANGER) quality += 2;
+    if (quality <= 1) return ExplorationResultType.AMBUSH;
+    if (quality <= 3) return explorationType(target);
+    if (quality <= 5) return ExplorationResultType.HIDDEN_ROUTE;
+    if (quality <= 7) return ExplorationResultType.MONSTER_CLUE;
+    return target.terrain() == TerrainType.VILLAGE
+        ? ExplorationResultType.VILLAGE_SECRET
+        : ExplorationResultType.ARTIFACT_CLUE;
+  }
+
+  private String explorationDescription(
+      ExplorationResultType resultType, MapHex target, String publicReward) {
+    String reward = publicReward == null || publicReward.isBlank() ? "" : " (" + publicReward + ")";
+    return switch (resultType) {
+      case BONUS_RESOURCE -> switch (target.terrain()) {
+        case FOREST -> "Woodland supplies discovered" + reward;
+        case FIELD -> "A concealed food cache discovered" + reward;
+        case MOUNTAIN, QUARRY -> "A mineral deposit discovered" + reward;
+        default -> "Useful supplies discovered" + reward;
+      };
+      case TRADE_CONTACT -> "A caravan contact paid for information" + reward;
+      case ARTIFACT_CLUE -> "A private artifact clue was uncovered" + reward;
+      case HIDDEN_ROUTE -> "A hidden route was mapped. No immediate resource reward.";
+      case LOCAL_QUEST -> "A local request for assistance was discovered. No immediate resource reward.";
+      case MONSTER_CLUE -> "Private clues about nearby monsters were discovered. No immediate resource reward.";
+      case AMBUSH -> "An ambush was avoided. No immediate resource reward.";
+      case VILLAGE_SECRET -> "A private village secret was uncovered. No immediate resource reward.";
+      case TEMPORARY_BUFF -> "A temporary advantage was discovered. No immediate resource reward.";
+      case NOTHING_FOUND -> "Nothing useful was found.";
     };
   }
 
@@ -699,7 +844,6 @@ public final class DefaultGameEngine implements GameEngine {
       requireCurrentTurn(g, p);
       if (p.selectedAction != ActionType.ATTACK)
         throw DomainException.of("ATTACK_CARD_REQUIRED", "Full Attack requires the ATTACK card");
-      spendActionPoints(p, attackActionPointCost(p));
     } else {
       resolutionAction(g, p, ActionType.ATTACK);
     }
@@ -717,15 +861,19 @@ public final class DefaultGameEngine implements GameEngine {
     int heroBonus = p.hero.heroClass() == HeroClass.KNIGHT ? 2 : 0;
     MonsterState monster =
         g.monsters.stream().filter(m -> m.location().equals(c.target())).findFirst().orElse(null);
+    PlayerState defender = defenderAt(g, p, c.target());
+    if (turn && defender != null) {
+      int apCost = fullAttackActionPointCost(p);
+      spendFullAttackActionPoints(p);
+      declareConflict(g, p, defender, c.target(), ConflictAttackType.FULL_ATTACK, apCost, e);
+      return;
+    }
+    if (turn) spendFullAttackActionPoints(p);
     int defenseArmy = 0, baseExtra = 0;
     if (monster != null) baseExtra = Math.max(0, monster.strength() - 10);
     else {
-      PlayerState defender =
-          g.players.stream()
-              .filter(x -> x.settlements.stream().anyMatch(s -> s.location().equals(c.target())))
-              .findFirst()
-              .orElseThrow(
-                  () -> DomainException.of("INVALID_TARGET", "No enemy or monster at target"));
+      if (defender == null)
+        throw DomainException.of("INVALID_TARGET", "No enemy or monster at target");
       defenseArmy =
           army.calculateArmyBonus(
               army.armyPower(
@@ -790,6 +938,449 @@ public final class DefaultGameEngine implements GameEngine {
                 result.strongRetaliation())));
     if (turn) e.add(event("ATTACK_RESOLVED", "playerId", p.id));
     else finishAction(g, p, e, "ATTACK_RESOLVED");
+  }
+
+  private void smallRaid(GameState g, PlayerState p, GameCommand.SmallRaid c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    if (p.hero == null || p.hero.location() == null || p.hero.location().distanceTo(c.target()) > 1)
+      throw DomainException.of("TARGET_NOT_ADJACENT", "Small Raid target must be adjacent to Hero");
+    MonsterState monster =
+        g.monsters.stream().filter(m -> m.location().equals(c.target())).findFirst().orElse(null);
+    PlayerState defender = defenderAt(g, p, c.target());
+    if (monster == null && defender == null)
+      throw DomainException.of("INVALID_TARGET", "Small Raid needs an adjacent enemy or monster");
+    spendActionPoints(p, 1);
+    if (defender != null) {
+      declareConflict(g, p, defender, c.target(), ConflictAttackType.SMALL_RAID, 1, e);
+      return;
+    }
+    int roll = g.forcedD20 != null ? g.forcedD20 : die(g, 20);
+    g.forcedD20 = null;
+    int total = roll + (p.hero.heroClass() == HeroClass.KNIGHT ? 2 : 0);
+    if (total >= 11) {
+      if (monster != null) {
+        int hp = monster.hp() - 1;
+        g.monsters.remove(monster);
+        if (hp > 0)
+          g.monsters.add(new MonsterState(monster.id(), monster.type(), monster.location(),
+              monster.strength(), hp, monster.targetPlayerId(), monster.tier()));
+      } else if (defender.resources.gold() > 0) {
+        defender.resources = defender.resources.add(ResourceType.GOLD, -1);
+        p.resources = p.resources.add(ResourceType.GOLD, 1);
+      }
+    }
+    e.add(new DomainEvent("SMALL_RAID_RESOLVED",
+        Map.of("playerId", p.id, "target", c.target(), "roll", roll, "total", total,
+            "success", total >= 11)));
+  }
+
+  private void declareConflict(
+      GameState g,
+      PlayerState attacker,
+      PlayerState defender,
+      HexCoordinate target,
+      ConflictAttackType attackType,
+      int apCost,
+      List<DomainEvent> e) {
+    if (g.pendingConflict != null)
+      throw DomainException.of("CONFLICT_PENDING", "Resolve the current conflict first");
+    g.pendingConflict =
+        new PendingConflict(
+            UUID.randomUUID(),
+            attacker.id,
+            defender.id,
+            target,
+            attackType,
+            attacker.selectedAction,
+            defender.selectedAction,
+            apCost);
+    g.phase = GamePhase.WAITING_FOR_DEFENDER_REACTION;
+    e.add(
+        new DomainEvent(
+            "CONFLICT_DECLARED",
+            Map.of(
+                "conflictId",
+                g.pendingConflict.conflictId(),
+                "attackerId",
+                attacker.id,
+                "defenderId",
+                defender.id,
+                "target",
+                target,
+                "attackType",
+                attackType)));
+  }
+
+  private void defenderReaction(
+      GameState g, PlayerState p, GameCommand.DefenderReaction c, List<DomainEvent> e) {
+    phase(g, GamePhase.WAITING_FOR_DEFENDER_REACTION);
+    PendingConflict conflict = g.pendingConflict;
+    if (conflict == null) throw DomainException.of("NO_PENDING_CONFLICT", "No conflict is pending");
+    if (!conflict.defenderPlayerId().equals(p.id))
+      throw DomainException.of("NOT_DEFENDER", "Only the defending player can choose a reaction");
+    resolvePendingConflict(g, conflict, c.reaction() == null ? ReactionType.NONE : c.reaction(), e);
+  }
+
+  private void resolvePendingConflict(
+      GameState g, PendingConflict conflict, ReactionType reaction, List<DomainEvent> e) {
+    PlayerState attacker = player(g, conflict.attackerPlayerId());
+    PlayerState defender = player(g, conflict.defenderPlayerId());
+    int roll = g.forcedD20 != null ? g.forcedD20 : die(g, 20);
+    g.forcedD20 = null;
+    int heroBonus = attacker.hero.heroClass() == HeroClass.KNIGHT ? 2 : 0;
+    int attackerCardBonus = conflict.attackerActionCard() == ActionType.ATTACK ? 1 : 0;
+    int defenderCardBonus = conflict.defenderActionCard() == ActionType.FORTIFY ? 1 : 0;
+    int resourcesStolen = 0;
+    int resourcesLost = 0;
+    int damage = 0;
+    boolean success;
+    String outcome;
+    ArmyRules army = new ArmyRules();
+    List<UnitState> attackers =
+        attacker.units.stream()
+            .filter(u -> !u.garrison() && u.fatigue() != FatigueState.EXHAUSTED)
+            .toList();
+    if (conflict.attackType() == ConflictAttackType.SMALL_RAID) {
+      int reactionDefense =
+          reaction == ReactionType.SHIELD ? 4 : reaction == ReactionType.COUNTERATTACK ? 1 : 0;
+      int attackTotal = roll + heroBonus + attackerCardBonus;
+      int defenseTotal = 10 + reactionDefense + defenderCardBonus;
+      success = attackTotal >= defenseTotal;
+      if (success) {
+        if (reaction == ReactionType.EVACUATION) {
+          if (defender.resources.gold() > 0) {
+            defender.resources = defender.resources.add(ResourceType.GOLD, -1);
+            resourcesLost = 1;
+          }
+          outcome = "Evacuation avoided the raid theft, but 1 Gold was lost.";
+        } else if (defender.resources.gold() > 0) {
+          defender.resources = defender.resources.add(ResourceType.GOLD, -1);
+          attacker.resources = attacker.resources.add(ResourceType.GOLD, 1);
+          resourcesStolen = 1;
+          outcome = "Raid succeeded and stole 1 Gold.";
+        } else {
+          outcome = "Raid succeeded, but no Gold was available to steal.";
+        }
+      } else {
+        outcome = "Raid failed.";
+        if (reaction == ReactionType.COUNTERATTACK && defenseTotal - attackTotal >= 3) {
+          woundFirstAttacker(attacker, attackers);
+          outcome += " Counterattack wounded an attacking unit.";
+        }
+      }
+      g.lastCombatReport =
+          List.of(
+              new CombatReportEntry(
+                  attacker.id,
+                  defender.id,
+                  null,
+                  attacker.hero.location(),
+                  conflict.target(),
+                  "SMALL_RAID",
+                  roll,
+                  attackTotal,
+                  defenseTotal,
+                  0,
+                  0,
+                  0,
+                  0));
+      e.add(conflictResolvedEvent(conflict, reaction, roll, attackTotal, defenseTotal, 0,
+          resourcesStolen, resourcesLost, outcome));
+    } else {
+      int armyBonus = army.calculateArmyBonus(army.armyPower(attackers, true, false));
+      int defenseArmy =
+          army.calculateArmyBonus(
+              army.armyPower(defender.units.stream().filter(UnitState::garrison).toList(), false, true));
+      CombatResolver.CombatResult result =
+          new CombatResolver()
+              .resolve(
+                  new CombatResolver.CombatInput(
+                      roll,
+                      heroBonus,
+                      armyBonus,
+                      attackerCardBonus,
+                      0,
+                      0,
+                      defenseArmy,
+                      defenderCardBonus,
+                      0,
+                      reaction,
+                      defender.fortificationTokens));
+      damage = reaction == ReactionType.EVACUATION ? Math.max(0, result.damage() - 1) : result.damage();
+      applySettlementDamage(defender, conflict.target(), damage);
+      if (reaction == ReactionType.EVACUATION && defender.resources.gold() > 0) {
+        defender.resources = defender.resources.add(ResourceType.GOLD, -1);
+        resourcesLost = 1;
+      }
+      if (result.counterDamage()) woundFirstAttacker(attacker, attackers);
+      attacker.units =
+          attacker.units.stream()
+              .map(u -> attackers.contains(u) ? new FatigueResolver().afterBattle(u, roll == 1) : u)
+              .toList();
+      success = result.success();
+      outcome =
+          success
+              ? "Full Attack dealt " + damage + " damage."
+              : "Full Attack failed to deal damage.";
+      if (result.counterDamage()) outcome += " Counterattack wounded an attacking unit.";
+      g.lastCombatReport =
+          List.of(
+              new CombatReportEntry(
+                  attacker.id,
+                  defender.id,
+                  null,
+                  attacker.hero.location(),
+                  conflict.target(),
+                  "FULL_ATTACK",
+                  roll,
+                  result.attackTotal(),
+                  result.defenseTotal(),
+                  damage,
+                  result.counterDamage() ? 1 : 0,
+                  damage,
+                  0));
+      e.add(conflictResolvedEvent(conflict, reaction, roll, result.attackTotal(), result.defenseTotal(),
+          damage, resourcesStolen, resourcesLost, outcome));
+    }
+    g.pendingConflict = null;
+    g.phase = GamePhase.PLAYER_TURNS;
+    g.currentTurnIndex = g.players.indexOf(attacker);
+  }
+
+  private DomainEvent conflictResolvedEvent(
+      PendingConflict conflict,
+      ReactionType reaction,
+      int roll,
+      int attackTotal,
+      int defenseTotal,
+      int damage,
+      int resourcesStolen,
+      int resourcesLost,
+      String outcome) {
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("attackerId", conflict.attackerPlayerId());
+    payload.put("defenderId", conflict.defenderPlayerId());
+    payload.put("target", conflict.target());
+    payload.put("attackType", conflict.attackType());
+    payload.put("reaction", reaction);
+    payload.put("roll", roll);
+    payload.put("attackTotal", attackTotal);
+    payload.put("defenseTotal", defenseTotal);
+    payload.put("damage", damage);
+    payload.put("resourcesStolen", resourcesStolen);
+    payload.put("resourcesLost", resourcesLost);
+    payload.put("attackerCard", conflict.attackerActionCard() == null ? "NONE" : conflict.attackerActionCard());
+    payload.put("defenderCard", conflict.defenderActionCard() == null ? "NONE" : conflict.defenderActionCard());
+    payload.put("outcome", outcome);
+    return new DomainEvent("CONFLICT_RESOLVED", payload);
+  }
+
+  private PlayerState defenderAt(GameState g, PlayerState attacker, HexCoordinate target) {
+    return g.players.stream()
+        .filter(player -> !player.id.equals(attacker.id))
+        .filter(player -> player.settlements.stream().anyMatch(s -> s.location().equals(target)))
+        .findFirst()
+        .orElse(null);
+  }
+
+  private void applySettlementDamage(PlayerState defender, HexCoordinate target, int damage) {
+    if (damage <= 0) return;
+    defender.settlements =
+        defender.settlements.stream()
+            .map(
+                settlement ->
+                    settlement.location().equals(target)
+                        ? new SettlementState(
+                            settlement.id(),
+                            settlement.location(),
+                            settlement.level(),
+                            Math.max(0, settlement.durability() - damage))
+                        : settlement)
+            .toList();
+  }
+
+  private void woundFirstAttacker(PlayerState attacker, List<UnitState> attackers) {
+    attackers.stream()
+        .findFirst()
+        .ifPresent(
+            wounded ->
+                attacker.units =
+                    attacker.units.stream()
+                        .map(
+                            unit ->
+                                unit.id().equals(wounded.id())
+                                    ? new UnitState(
+                                        unit.id(),
+                                        unit.type(),
+                                        unit.fatigue(),
+                                        true,
+                                        unit.garrison(),
+                                        unit.contractUntilRound())
+                                    : unit)
+                        .toList());
+  }
+
+  private void priestHeal(GameState g, PlayerState p, GameCommand.PriestHeal c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.PRIEST);
+    spendActionPoints(p, 1);
+    spendGrace(p, 1);
+    boolean healed = false;
+    if (p.hero.location() != null && p.hero.location().distanceTo(c.target()) <= 1 && p.hero.hp() < 3) {
+      p.hero = new HeroState(p.hero.heroClass(), Math.min(3, p.hero.hp() + 1), p.hero.mana(),
+          p.hero.grace(), p.hero.location(), p.hero.defeated());
+      healed = true;
+    } else {
+      for (int i = 0; i < p.units.size(); i++) {
+        UnitState unit = p.units.get(i);
+        if (unit.wounded()) {
+          p.units.set(i, new UnitState(unit.id(), unit.type(), unit.fatigue(), false,
+              unit.garrison(), unit.contractUntilRound()));
+          healed = true;
+          break;
+        }
+      }
+    }
+    if (!healed) throw DomainException.of("INVALID_TARGET", "No damaged friendly target nearby");
+    e.add(event("PRIEST_HEAL_USED", "playerId", p.id));
+  }
+
+  private void priestBless(GameState g, PlayerState p, GameCommand.PriestBless c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.PRIEST);
+    spendActionPoints(p, 1);
+    spendGrace(p, 1);
+    p.blessTokens++;
+    e.add(event("PRIEST_BLESS_USED", "playerId", p.id));
+  }
+
+  private void priestSanctuary(
+      GameState g, PlayerState p, GameCommand.PriestSanctuary c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.PRIEST);
+    spendActionPoints(p, 2);
+    spendGrace(p, 2);
+    p.sanctuaryTokens++;
+    e.add(event("PRIEST_SANCTUARY_USED", "playerId", p.id));
+  }
+
+  private void arcaneBolt(GameState g, PlayerState p, GameCommand.ArcaneBolt c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.MAGE);
+    spendActionPoints(p, 1);
+    spendMana(p, 1);
+    if (p.hero.location() == null || p.hero.location().distanceTo(c.target()) > 1)
+      throw DomainException.of("INVALID_TARGET", "Arcane Bolt target must be adjacent");
+    int roll = g.forcedD20 != null ? g.forcedD20 : die(g, 20);
+    g.forcedD20 = null;
+    int total = roll + 2;
+    MonsterState monster =
+        g.monsters.stream().filter(m -> m.location().equals(c.target())).findFirst().orElse(null);
+    if (monster == null)
+      throw DomainException.of("INVALID_TARGET", "Arcane Bolt needs a monster target for now");
+    if (total >= 10) {
+      int hp = monster.hp() - 1;
+      g.monsters.remove(monster);
+      if (hp > 0)
+        g.monsters.add(new MonsterState(monster.id(), monster.type(), monster.location(),
+            monster.strength(), hp, monster.targetPlayerId(), monster.tier()));
+    }
+    e.add(new DomainEvent("ARCANE_BOLT_RESOLVED",
+        Map.of("playerId", p.id, "target", c.target(), "roll", roll, "total", total,
+            "success", total >= 10)));
+  }
+
+  private void mageWard(GameState g, PlayerState p, GameCommand.MageWard c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.MAGE);
+    spendActionPoints(p, 1);
+    spendMana(p, 1);
+    p.wardTokens++;
+    e.add(event("MAGE_WARD_USED", "playerId", p.id));
+  }
+
+  private void mageReveal(GameState g, PlayerState p, GameCommand.MageReveal c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.MAGE);
+    spendActionPoints(p, 1);
+    spendMana(p, 1);
+    MapHex target = hex(g, c.target());
+    if (target == null || p.hero.location() == null || p.hero.location().distanceTo(c.target()) > 1)
+      throw DomainException.of("INVALID_TARGET", "Reveal target must be adjacent");
+    ExplorationResultType preview = explorationType(target);
+    g.explorationResults.add(new ExplorationResult(p.id, c.target(), preview,
+        "Mage Reveal preview: " + preview.name()));
+    e.add(new DomainEvent("MAGE_REVEAL_USED",
+        Map.of("playerId", p.id, "target", c.target(), "preview", preview)));
+  }
+
+  private void transmute(GameState g, PlayerState p, GameCommand.Transmute c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.MAGE);
+    if (c.give() == c.receive())
+      throw DomainException.of("INVALID_PAYLOAD", "Choose two different resources");
+    spendActionPoints(p, 1);
+    spendMana(p, 1);
+    spendResources(p, Resources.none().add(c.give(), 1));
+    p.resources = p.resources.add(c.receive(), 1);
+    e.add(event("MAGE_TRANSMUTE_USED", "playerId", p.id));
+  }
+
+  private void scout(GameState g, PlayerState p, GameCommand.Scout c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.RANGER);
+    int cost = p.selectedAction == ActionType.EXPLORE ? 0 : 1;
+    spendActionPoints(p, cost);
+    MapHex target = hex(g, c.target());
+    if (target == null || p.hero.location() == null || p.hero.location().distanceTo(c.target()) > 1)
+      throw DomainException.of("INVALID_TARGET", "Scout target must be adjacent");
+    ExplorationResultType preview = explorationType(target);
+    e.add(new DomainEvent("RANGER_SCOUT_USED",
+        Map.of("playerId", p.id, "target", c.target(), "preview", preview)));
+  }
+
+  private void swiftMove(GameState g, PlayerState p, GameCommand.SwiftMove c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.RANGER);
+    if (p.swiftMoveUsed) throw DomainException.of("ACTION_ALREADY_USED", "Swift Move already used");
+    p.swiftMoveUsed = true;
+    if (p.hero.location() == null || p.hero.location().distanceTo(c.to()) > 1 || hex(g, c.to()) == null)
+      throw DomainException.of("INVALID_TARGET", "Swift Move target must be adjacent");
+    p.hero = new HeroState(p.hero.heroClass(), p.hero.hp(), p.hero.mana(), p.hero.grace(),
+        c.to(), p.hero.defeated());
+    e.add(event("RANGER_SWIFT_MOVE_USED", "playerId", p.id));
+  }
+
+  private void quickRoad(GameState g, PlayerState p, GameCommand.QuickRoad c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.ENGINEER);
+    if (p.quickRoadUsed) throw DomainException.of("ACTION_ALREADY_USED", "Quick Road already used");
+    p.quickRoadUsed = true;
+    buildRoad(g, p, new GameCommand.BuildRoad(c.from(), c.to()), e);
+  }
+
+  private void repair(GameState g, PlayerState p, GameCommand.Repair c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.ENGINEER);
+    if (p.repairUsed) throw DomainException.of("ACTION_ALREADY_USED", "Repair already used");
+    p.repairUsed = true;
+    p.units = p.units.stream()
+        .map(u -> u.wounded() ? new UnitState(u.id(), u.type(), u.fatigue(), false,
+            u.garrison(), u.contractUntilRound()) : u)
+        .toList();
+    e.add(event("ENGINEER_REPAIR_USED", "playerId", p.id));
+  }
+
+  private void marketDeal(GameState g, PlayerState p, GameCommand.MarketDeal c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    requireHero(p, HeroClass.MERCHANT);
+    int rate = p.selectedAction == ActionType.TRADE && !p.freeTradeCardBuyUsed ? 2 : 3;
+    p.freeTradeCardBuyUsed = true;
+    if (resourceAmount(p.resources, c.give()) < rate)
+      throw DomainException.of("INSUFFICIENT_RESOURCES", "Not enough resources for Market Deal");
+    p.resources = p.resources.add(c.give(), -rate).add(c.receive(), 1);
+    spendActionPoints(p, 1);
+    e.add(event("MERCHANT_MARKET_DEAL_USED", "playerId", p.id));
   }
 
   private void lockAttackPlan(
@@ -1101,6 +1692,9 @@ public final class DefaultGameEngine implements GameEngine {
     p.freeRoadUsed = false;
     p.freeMilitiaUsed = false;
     p.attackDiscountUsed = false;
+    p.swiftMoveUsed = false;
+    p.quickRoadUsed = false;
+    p.repairUsed = false;
   }
 
   private List<UUID> actionTurnOrder(GameState g) {
@@ -1181,9 +1775,14 @@ public final class DefaultGameEngine implements GameEngine {
               Math.min(
                   p.hero.heroClass() == HeroClass.MAGE ? 3 : p.hero.mana(),
                   p.hero.mana() + (p.hero.heroClass() == HeroClass.MAGE ? 1 : 0)),
-              p.hero.grace(),
+              Math.min(
+                  p.hero.heroClass() == HeroClass.PRIEST ? 4 : p.hero.grace(),
+                  p.hero.grace() + (p.hero.heroClass() == HeroClass.PRIEST ? 1 : 0)),
               p.hero.location(),
               p.hero.defeated());
+      p.blessTokens = 0;
+      p.sanctuaryTokens = 0;
+      p.wardTokens = 0;
       p.units =
           p.units.stream().map(u -> u.garrison() ? u : new FatigueResolver().recover(u)).toList();
     }
@@ -1279,6 +1878,139 @@ public final class DefaultGameEngine implements GameEngine {
   private void phase(GameState g, GamePhase required) {
     if (g.phase != required)
       throw DomainException.of("INVALID_PHASE", "Expected " + required + " but was " + g.phase);
+  }
+
+  private String publicLogMessage(GameState g, DomainEvent event) {
+    Map<String, Object> p = event.publicPayload();
+    return switch (event.type()) {
+      case "PRODUCTION_RESOLVED" -> productionMessage(g, p);
+      case "MONSTER_SPAWNED" -> "🎲 Roll 7: no production. A monster appears in the realm.";
+      case "STARTING_OUTPOST_PLACED" ->
+          playerName(g, p.get("playerId")) + " built a starting Outpost at " + coordText(p.get("at")) + ".";
+      case "STARTING_ROAD_PLACED" ->
+          playerName(g, p.get("playerId")) + " built a starting Road from " + coordText(p.get("from"))
+              + " to " + coordText(p.get("to")) + ".";
+      case "ROAD_BUILT" ->
+          playerName(g, p.get("playerId")) + " built a Road"
+              + (p.containsKey("from") ? " from " + coordText(p.get("from")) + " to " + coordText(p.get("to")) : "")
+              + ".";
+      case "OUTPOST_BUILT" ->
+          playerName(g, p.get("playerId")) + " built an Outpost"
+              + (p.containsKey("at") ? " at " + coordText(p.get("at")) : "")
+              + ".";
+      case "UNIT_RECRUITED" ->
+          playerName(g, p.get("playerId")) + " recruited "
+              + String.valueOf(p.getOrDefault("unitType", "a unit")) + ".";
+      case "HEX_EXPLORED", "DEEP_EXPLORE_RESOLVED" ->
+          playerName(g, p.get("playerId")) + " explored " + coordText(p.get("target"))
+              + (String.valueOf(p.getOrDefault("publicReward", "")).isBlank()
+                  ? "."
+                  : " and gained " + p.get("publicReward") + ".");
+      case "RANGER_SCOUT_USED" ->
+          playerName(g, p.get("playerId")) + " scouted " + coordText(p.get("target"))
+              + ". Possible lead: " + p.getOrDefault("preview", "unknown") + ".";
+      case "MAGE_REVEAL_USED" ->
+          playerName(g, p.get("playerId")) + " revealed signs at " + coordText(p.get("target"))
+              + ". Possible category: " + p.getOrDefault("preview", "unknown") + ".";
+      case "COMBAT_RESOLVED" ->
+          playerName(g, p.get("playerId")) + " attacked: roll " + p.getOrDefault("roll", "?")
+              + ", attack " + p.getOrDefault("attackTotal", "?") + " vs defense "
+              + p.getOrDefault("defenseTotal", "?") + ". Damage: " + p.getOrDefault("damage", 0) + ".";
+      case "SMALL_RAID_RESOLVED" ->
+          playerName(g, p.get("playerId")) + " performed a Small Raid at " + coordText(p.get("target"))
+              + ": roll " + p.getOrDefault("roll", "?") + ", total " + p.getOrDefault("total", "?")
+              + (Boolean.TRUE.equals(p.get("success")) ? ". Success." : ". Failed.") ;
+      case "ARCANE_BOLT_RESOLVED" ->
+          playerName(g, p.get("playerId")) + " cast Arcane Bolt at " + coordText(p.get("target"))
+              + ": roll " + p.getOrDefault("roll", "?") + ", total " + p.getOrDefault("total", "?")
+              + (Boolean.TRUE.equals(p.get("success")) ? ". Hit." : ". Miss.") ;
+      case "PRIEST_HEAL_USED" -> playerName(g, p.get("playerId")) + " used Heal.";
+      case "PRIEST_BLESS_USED" -> playerName(g, p.get("playerId")) + " used Bless.";
+      case "PRIEST_SANCTUARY_USED" -> playerName(g, p.get("playerId")) + " used Sanctuary.";
+      case "MAGE_WARD_USED" -> playerName(g, p.get("playerId")) + " placed a Ward.";
+      case "MAGE_TRANSMUTE_USED" -> playerName(g, p.get("playerId")) + " transmuted one resource.";
+      case "CONFLICT_DECLARED" ->
+          playerName(g, p.get("attackerId")) + " declared " + p.getOrDefault("attackType", "an attack")
+              + " against " + playerName(g, p.get("defenderId")) + " at " + coordText(p.get("target"))
+              + ". Waiting for defender reaction.";
+      case "CONFLICT_RESOLVED" ->
+          playerName(g, p.get("attackerId")) + " vs " + playerName(g, p.get("defenderId"))
+              + " — " + p.getOrDefault("attackType", "conflict")
+              + ", reaction: " + p.getOrDefault("reaction", "NONE")
+              + ", roll " + p.getOrDefault("roll", "?")
+              + ", attack " + p.getOrDefault("attackTotal", "?")
+              + " vs defense " + p.getOrDefault("defenseTotal", "?")
+              + ", damage " + p.getOrDefault("damage", 0)
+              + ", stolen " + p.getOrDefault("resourcesStolen", 0)
+              + ", lost " + p.getOrDefault("resourcesLost", 0)
+              + ". Cards revealed: attacker " + p.getOrDefault("attackerCard", "NONE")
+              + ", defender " + p.getOrDefault("defenderCard", "NONE")
+              + ". " + p.getOrDefault("outcome", "");
+      case "HERO_MOVED" -> playerName(g, p.get("playerId")) + " moved their Hero.";
+      case "RANGER_SWIFT_MOVE_USED" -> playerName(g, p.get("playerId")) + " used Swift Move.";
+      case "ENGINEER_REPAIR_USED" -> playerName(g, p.get("playerId")) + " repaired damage.";
+      case "MERCHANT_MARKET_DEAL_USED" -> playerName(g, p.get("playerId")) + " made a Market Deal.";
+      case "PLAYER_TURN_STARTED" -> "Turn: " + playerName(g, p.get("playerId")) + " is active.";
+      case "PLAYER_TURNS_COMPLETE" -> "All players finished their action turns.";
+      case "ROUND_STARTED" -> "Round " + p.getOrDefault("round", g.roundNumber) + " begins.";
+      case "GAME_OVER" -> "Game over. Winner: " + winnersText(g, p.get("winners")) + ".";
+      default -> null;
+    };
+  }
+
+  private String productionMessage(GameState g, Map<String, Object> payload) {
+    Object roll = payload.getOrDefault("roll", g.lastRoll);
+    Object production = payload.get("production");
+    if (!(production instanceof Collection<?> entries) || entries.isEmpty()) {
+      return "🎲 Roll " + roll + ": no settlements produced resources.";
+    }
+    Map<String, Map<String, Integer>> byPlayer = new LinkedHashMap<>();
+    for (Object entry : entries) {
+      if (entry instanceof ProductionResolver.Production item) {
+        byPlayer
+            .computeIfAbsent(playerName(g, item.playerId()), ignored -> new LinkedHashMap<>())
+            .merge(item.resource().name(), item.amount(), Integer::sum);
+      }
+    }
+    if (byPlayer.isEmpty()) return "🎲 Roll " + roll + ": production resolved.";
+    String gains =
+        byPlayer.entrySet().stream()
+            .map(entry ->
+                entry.getKey() + " gains "
+                    + entry.getValue().entrySet().stream()
+                        .map(resource -> resource.getValue() + " " + title(resource.getKey()))
+                        .reduce((a, b) -> a + ", " + b)
+                        .orElse("nothing"))
+            .reduce((a, b) -> a + "; " + b)
+            .orElse("production resolved");
+    return "🎲 Roll " + roll + ": " + gains + ".";
+  }
+
+  private String playerName(GameState g, Object id) {
+    if (id instanceof UUID uuid) {
+      return g.players.stream()
+          .filter(player -> player.id.equals(uuid))
+          .map(player -> player.color.name().charAt(0) + player.color.name().substring(1).toLowerCase())
+          .findFirst()
+          .orElse("Unknown");
+    }
+    return "Unknown";
+  }
+
+  private String winnersText(GameState g, Object winners) {
+    if (winners instanceof Collection<?> ids) {
+      return ids.stream().map(id -> playerName(g, id)).reduce((a, b) -> a + ", " + b).orElse("Unknown");
+    }
+    return "Unknown";
+  }
+
+  private String coordText(Object value) {
+    if (value instanceof HexCoordinate c) return c.q() + "," + c.r();
+    return "?";
+  }
+
+  private String title(String value) {
+    return value.charAt(0) + value.substring(1).toLowerCase();
   }
 
   private DomainEvent event(String type, String key, Object value) {

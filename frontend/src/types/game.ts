@@ -71,6 +71,7 @@ export type Game = {
   lastRoll?: number;
   firstPlayerId?: string;
   currentTurnPlayerId?: string;
+  pendingConflict?: PendingConflict;
   startingPlacementStep?: 'OUTPOST' | 'ROAD' | 'COMPLETE';
   currentStartingPlacementPlayerId?: string;
   map: Hex[];
@@ -83,6 +84,13 @@ export type Game = {
   winners: string[];
   revealedAttackPlans: AttackPlanView[];
   combatReport: CombatReportEntry[];
+};
+export type PendingConflict = {
+  conflictId: string;
+  attackerPlayerId: string;
+  defenderPlayerId: string;
+  target: Coord;
+  attackType: 'SMALL_RAID' | 'FULL_ATTACK';
 };
 export type TradeProposal = {
   proposalId: string;
@@ -156,7 +164,42 @@ export type PrivateView = {
   units: Unit[];
   hand: Card[];
   activeSeals: string[];
+  privateExplorationResults: ExplorationResult[];
   temporaryHeroClass?: string;
   attackPlan?: AttackPlan;
 };
 export type Seat = { playerId: string; accessToken: string; displayName: string };
+
+export type TargetType =
+  | 'NONE'
+  | 'HEX'
+  | 'FRIENDLY_HEX'
+  | 'ENEMY_HEX'
+  | 'MONSTER_HEX'
+  | 'UNIT'
+  | 'HERO'
+  | 'PLAYER'
+  | 'CARD';
+
+export type LegalAction = {
+  actionType: string;
+  label: string;
+  description: string;
+  apCost: number;
+  resourceCost: Partial<Record<keyof Resources | 'mana' | 'grace', number>>;
+  available: boolean;
+  disabledReason?: string;
+  requiresTarget: boolean;
+  targetType: TargetType;
+  validTargetHexIds: string[];
+  validTargetUnitIds: string[];
+  validTargetPlayerIds: string[];
+};
+
+export type LegalActionsResponse = {
+  actions: string[];
+  movementTargets: string[];
+  buildTargets: string[];
+  attackTargets: string[];
+  availableActions: LegalAction[];
+};

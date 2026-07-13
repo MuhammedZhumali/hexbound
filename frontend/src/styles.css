@@ -833,6 +833,25 @@ select {
   font: 700 11px Inter !important;
 }
 
+.hero-token {
+  filter: drop-shadow(0 4px 7px rgba(25, 35, 31, 0.36));
+  pointer-events: none;
+}
+
+.hero-token circle {
+  stroke: #fff8e6;
+  stroke-width: 3px;
+}
+
+.hero-token text {
+  fill: #fffdf2;
+  paint-order: stroke;
+  stroke: rgba(33, 43, 38, 0.55);
+  stroke-width: 3px;
+  font: 900 17px Inter;
+  text-anchor: middle;
+}
+
 @keyframes attack-route {
   to {
     stroke-dashoffset: -13;
@@ -977,6 +996,30 @@ dd {
 .hand-list {
   display: grid;
   gap: 0.35rem;
+}
+
+.private-discoveries {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.private-discoveries article,
+.private-discoveries em {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.5rem;
+  color: #354740;
+  background: #fff8dc;
+  border: 1px solid #e3d497;
+  border-radius: 8px;
+  font-size: 0.68rem;
+}
+
+.private-discoveries small {
+  color: #806d2e;
+  font-size: 0.54rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .hand-list article {
@@ -1357,6 +1400,179 @@ dd {
 .context-action-copy strong {
   color: #9a3f46;
   font-weight: 800;
+}
+
+.available-actions-panel {
+  display: grid;
+  gap: 1rem;
+  width: 100%;
+}
+
+.available-actions-panel > header,
+.targeting-confirm {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  border: 1px solid rgba(65, 112, 87, 0.2);
+  border-radius: 18px;
+  background: rgba(255, 249, 231, 0.82);
+}
+
+.ap-empty {
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: #7d2e2e;
+  color: #fff7df;
+  font-weight: 800;
+}
+
+.action-groups {
+  display: grid;
+  gap: 1rem;
+}
+
+.action-group h4 {
+  margin: 0 0 0.45rem;
+}
+
+.action-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.65rem;
+}
+
+.available-action {
+  min-height: 116px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.45rem;
+  text-align: left;
+  border: 1px solid rgba(65, 112, 87, 0.24);
+  border-radius: 16px;
+  padding: 0.85rem;
+  background: #fffdf5;
+}
+
+.available-action span {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.available-action small,
+.available-action em,
+.available-action i {
+  color: #6f6356;
+  font-style: normal;
+}
+
+.available-action strong {
+  justify-self: end;
+  color: #2f6b4f;
+}
+
+.available-action.disabled {
+  opacity: 0.62;
+}
+
+.targeting-confirm {
+  border-color: rgba(116, 64, 145, 0.35);
+  background: rgba(246, 240, 255, 0.88);
+}
+
+.attack-preview-card {
+  display: grid;
+  gap: 0.25rem;
+  min-width: min(320px, 100%);
+  padding: 0.75rem;
+  border-radius: 14px;
+  background: rgba(255, 253, 245, 0.88);
+  border: 1px solid rgba(154, 63, 70, 0.22);
+  font-size: 0.84rem;
+}
+
+.attack-preview-card label {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.35rem;
+  font-weight: 800;
+}
+
+.defender-reaction-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1.1rem;
+  border: 1px solid rgba(154, 63, 70, 0.24);
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(255, 249, 231, 0.96), rgba(246, 240, 255, 0.92));
+}
+
+.reaction-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.reaction-grid button {
+  min-height: 118px;
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+  text-align: left;
+  border: 1px solid rgba(65, 112, 87, 0.24);
+  border-radius: 16px;
+  padding: 0.85rem;
+  background: #fffdf5;
+}
+
+.reaction-grid span {
+  color: #6f6356;
+  font-size: 0.85rem;
+}
+
+.defender-wait {
+  border-color: rgba(154, 63, 70, 0.24);
+  background: rgba(255, 249, 231, 0.86);
+}
+
+.target-overlay.target-EXPLORE_HEX,
+.target-overlay.target-DEEP_EXPLORE,
+.target-overlay.target-SCOUT,
+.target-overlay.target-MAGE_REVEAL {
+  stroke: #8e5cc0;
+}
+
+.target-overlay.target-SMALL_RAID,
+.target-overlay.target-FULL_ATTACK,
+.target-overlay.target-ARCANE_BOLT {
+  stroke: #d24b5a;
+}
+
+.target-overlay.target-PRIEST_HEAL,
+.target-overlay.target-PRIEST_BLESS,
+.target-overlay.target-PRIEST_SANCTUARY,
+.target-overlay.target-MAGE_WARD {
+  stroke: #3f8fc3;
+}
+
+.target-overlay.target-BUILD_ROAD,
+.target-overlay.target-BUILD_OUTPOST,
+.target-overlay.target-QUICK_ROAD {
+  stroke: #2f6bce;
+}
+
+.target-badge circle {
+  fill: #fff7df;
+  stroke: #453a2f;
+  stroke-width: 2;
+}
+
+.target-badge text {
+  text-anchor: middle;
+  font-weight: 900;
+  fill: #453a2f;
+  pointer-events: none;
 }
 
 .planning-confirm {

@@ -63,10 +63,12 @@ const polygonPoints = (x: number, y: number) =>
 export function Board({
   game,
   legal = [],
+  overlayType,
   explainInvalid,
 }: {
   game: Game;
   legal?: string[];
+  overlayType?: string;
   explainInvalid?: (hex: Hex) => void;
 }) {
   const { selected, select, zoom, pan, setZoom, setPan } = useUi();
@@ -130,6 +132,7 @@ export function Board({
               hex={hex}
               selected={selected?.q === hex.coordinate.q && selected.r === hex.coordinate.r}
               legal={legal.includes(`${hex.coordinate.q},${hex.coordinate.r}`)}
+              overlayType={overlayType}
               showInvalid={legal.length > 0}
               onSelect={() => {
                 if (legal.length > 0 && !legal.includes(`${hex.coordinate.q},${hex.coordinate.r}`)) {
@@ -197,6 +200,27 @@ export function Board({
             }),
           )}
 
+          {game.players
+            .filter((player) => player.hero?.location && !player.hero.defeated)
+            .map((player) => {
+              const location = player.hero!.location!;
+              const position = center(location.q, location.r);
+              return (
+                <g
+                  key={`hero-${player.id}`}
+                  className="hero-token"
+                  transform={`translate(${position.x + 18} ${position.y - 18})`}
+                >
+                  <circle r="15" fill={player.color.toLowerCase()} />
+                  <text y="5">{heroIcon(player.hero?.heroClass ?? player.heroClass)}</text>
+                  <title>
+                    {player.displayName} Hero: {player.hero?.heroClass ?? player.heroClass ?? 'Hero'} (
+                    {location.q}, {location.r})
+                  </title>
+                </g>
+              );
+            })}
+
           {game.monsters.map((monster) => {
             const position = center(monster.location.q, monster.location.r);
             return (
@@ -241,6 +265,7 @@ function HexTile({
   hex,
   selected,
   legal,
+  overlayType,
   showInvalid,
   onSelect,
   onTooltip,
@@ -248,6 +273,7 @@ function HexTile({
   hex: Hex;
   selected: boolean;
   legal: boolean;
+  overlayType?: string;
   showInvalid: boolean;
   onSelect: () => void;
   onTooltip: (hex?: Hex) => void;
@@ -269,8 +295,15 @@ function HexTile({
         fill={terrainColors[hex.terrain] ?? '#777'}
         stroke={selected ? '#fff2a9' : legal ? 'url(#legal)' : '#425047'}
         strokeWidth={selected || legal ? 5 : showInvalid ? 2.5 : 2}
+        className={legal ? `target-overlay target-${overlayType ?? 'hex'}` : undefined}
         filter="url(#shadow)"
       />
+      {legal && (
+        <g transform={`translate(${position.x - 26} ${position.y - 28})`} className="target-badge">
+          <circle r="12" />
+          <text y="4">{targetIcon(overlayType)}</text>
+        </g>
+      )}
       {showInvalid && !legal && (
         <g transform={`translate(${position.x + 23} ${position.y - 28})`} className="hex-lock">
           <circle r="11" />
@@ -296,6 +329,33 @@ function HexTile({
       </title>
     </g>
   );
+}
+
+function targetIcon(overlayType?: string) {
+  if (overlayType?.includes('ATTACK') || overlayType?.includes('ENEMY') || overlayType?.includes('MONSTER')) return '⚔';
+  if (overlayType?.includes('HEAL') || overlayType?.includes('HERO') || overlayType?.includes('FRIENDLY')) return '+';
+  if (overlayType?.includes('BUILD')) return '⌂';
+  if (overlayType?.includes('EXPLORE') || overlayType === 'HEX') return '⌁';
+  return '•';
+}
+
+function heroIcon(heroClass?: string) {
+  switch (heroClass) {
+    case 'KNIGHT':
+      return '♞';
+    case 'MAGE':
+      return '✦';
+    case 'PRIEST':
+      return '✚';
+    case 'RANGER':
+      return '⌁';
+    case 'MERCHANT':
+      return '¤';
+    case 'ENGINEER':
+      return '⚙';
+    default:
+      return '★';
+  }
 }
 
 function rollProbability(number: number) {

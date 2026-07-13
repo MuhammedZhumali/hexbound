@@ -39,6 +39,7 @@ public final class Views {
       StartingPlacementStep startingPlacementStep,
       UUID currentStartingPlacementPlayerId,
       UUID currentTurnPlayerId,
+      PendingConflictView pendingConflict,
       List<MapHex> map,
       List<PlayerSummary> players,
       List<MonsterState> monsters,
@@ -67,6 +68,7 @@ public final class Views {
       List<UnitState> units,
       List<Card> hand,
       Set<PathSeal> activeSeals,
+      List<ExplorationResult> privateExplorationResults,
       HeroClass temporaryHeroClass,
       AttackPlan attackPlan) {}
 
@@ -76,6 +78,13 @@ public final class Views {
       HexCoordinate target,
       int participatingUnitCount,
       boolean heroParticipates) {}
+
+  public record PendingConflictView(
+      UUID conflictId,
+      UUID attackerPlayerId,
+      UUID defenderPlayerId,
+      HexCoordinate target,
+      ConflictAttackType attackType) {}
 
   public record HeroDraftView(
       GamePhase phase,
@@ -95,9 +104,36 @@ public final class Views {
       List<DomainEvent> events,
       PublicGameView state) {}
 
+  public enum TargetType {
+    NONE,
+    HEX,
+    FRIENDLY_HEX,
+    ENEMY_HEX,
+    MONSTER_HEX,
+    UNIT,
+    HERO,
+    PLAYER,
+    CARD
+  }
+
+  public record LegalActionDto(
+      String actionType,
+      String label,
+      String description,
+      int apCost,
+      Map<String, Integer> resourceCost,
+      boolean available,
+      String disabledReason,
+      boolean requiresTarget,
+      TargetType targetType,
+      List<String> validTargetHexIds,
+      List<UUID> validTargetUnitIds,
+      List<UUID> validTargetPlayerIds) {}
+
   public record LegalActions(
       List<String> actions,
       List<String> movementTargets,
       List<String> buildTargets,
-      List<String> attackTargets) {}
+      List<String> attackTargets,
+      List<LegalActionDto> availableActions) {}
 }

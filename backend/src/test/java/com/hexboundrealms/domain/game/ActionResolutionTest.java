@@ -66,6 +66,27 @@ class ActionResolutionTest {
   }
 
   @Test
+  void deepExploreDescriptionMatchesActualResultAndPublicEventHidesSecretDetails() {
+    GameState game = resolutionGame(ActionType.EXPLORE);
+    game.seed = 7;
+    PlayerState player = game.players.getFirst();
+    HexCoordinate origin = new HexCoordinate(0, 0);
+    HexCoordinate mountain = new HexCoordinate(1, 0);
+    player.hero = HeroState.create(HeroClass.KNIGHT, origin);
+    game.map = new ArrayList<>(java.util.List.of(
+        new MapHex(origin, TerrainType.FIELD, ResourceType.FOOD, 5, null, null, null),
+        new MapHex(mountain, TerrainType.MOUNTAIN, ResourceType.ORE, 6, null, null, null)));
+
+    CommandResult result = engine.execute(game, player.id, new GameCommand.DeepExplore(mountain));
+
+    assertThat(game.explorationResults.getFirst().type()).isEqualTo(ExplorationResultType.ARTIFACT_CLUE);
+    assertThat(game.explorationResults.getFirst().description()).contains("artifact clue");
+    assertThat(game.explorationResults.getFirst().description()).doesNotContain("mineral");
+    assertThat(result.events().getFirst().publicPayload()).doesNotContainKey("description");
+    assertThat(result.events().getFirst().publicPayload()).containsEntry("publicReward", "+1 GOLD, +1 Reputation");
+  }
+
+  @Test
   void buyingMarketCardSpendsGoldAndAddsCardToHand() {
     GameState game = new GameState();
     game.id = UUID.randomUUID();

@@ -29,8 +29,6 @@ describe('private setup flows', () => {
         legalBuildTargets={[]}
         send={send}
         busy={false}
-        reaction="SHIELD"
-        setReaction={vi.fn()}
         canResolve
       />,
     );
@@ -68,8 +66,6 @@ describe('private setup flows', () => {
         legalBuildTargets={[]}
         send={send}
         busy={false}
-        reaction="SHIELD"
-        setReaction={vi.fn()}
         canResolve
       />,
     );
@@ -111,8 +107,6 @@ describe('private setup flows', () => {
         legalBuildTargets={[]}
         send={send}
         busy={false}
-        reaction="SHIELD"
-        setReaction={vi.fn()}
         canResolve
       />,
     );

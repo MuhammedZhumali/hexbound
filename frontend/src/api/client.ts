@@ -1,4 +1,4 @@
-import type { Game, HeroDraft, PrivateView, Seat } from '../types/game';
+import type { Game, HeroDraft, LegalActionsResponse, PrivateView, Seat } from '../types/game';
 const base = import.meta.env.VITE_API_URL ?? '';
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(base + path, {
@@ -29,7 +29,7 @@ export const api = {
       headers: { 'X-Player-Token': seat.accessToken },
     }),
   legal: (id: string, playerId: string) =>
-    request<{ actions: string[]; movementTargets: string[]; buildTargets: string[]; attackTargets: string[] }>(
+    request<LegalActionsResponse>(
       `/api/v1/games/${id}/legal-actions?playerId=${playerId}`,
     ),
   command: (game: Game, seat: Seat, type: string, payload: unknown = {}) =>

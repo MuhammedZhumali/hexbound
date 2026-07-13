@@ -178,6 +178,14 @@ public class GameApplicationService {
             .filter(x -> x.id.equals(playerId))
             .findFirst()
             .orElseThrow(() -> DomainException.of("INVALID_PLAYER", "Unknown player"));
+    if (g.phase == GamePhase.WAITING_FOR_DEFENDER_REACTION) {
+      return new LegalActions(
+          List.of(),
+          List.of(),
+          List.of(),
+          List.of(),
+          defenderReactionActions(g, playerId));
+    }
     boolean placementTurn = g.phase == GamePhase.STARTING_PLACEMENT
         && placementPlayerId(g).map(playerId::equals).orElse(false);
     List<String> buildTargets = g.map.stream()
@@ -191,7 +199,12 @@ public class GameApplicationService {
             .filter(at -> g.map.stream().anyMatch(h -> h.coordinate().equals(at)))
             .filter(at -> g.monsters.stream().noneMatch(m -> m.location().equals(at)))
             .map(at -> at.q() + "," + at.r()).toList()
-        : List.of();
+        : g.phase == GamePhase.PLAYER_TURNS && p.hero != null && p.hero.location() != null
+            ? p.hero.location().neighbors().stream()
+                .filter(at -> g.map.stream().anyMatch(h -> h.coordinate().equals(at)))
+                .filter(at -> g.monsters.stream().noneMatch(m -> m.location().equals(at)))
+                .map(at -> at.q() + "," + at.r()).toList()
+            : List.of();
     List<String> actions =
         (g.phase == GamePhase.ACTION_CARD_SELECTION
                 || g.phase == GamePhase.PLANNING
@@ -202,10 +215,160 @@ public class GameApplicationService {
                 .map(Enum::name)
                 .toList()
             : List.of();
-    return new LegalActions(actions, movementTargets, buildTargets, List.of());
+    List<String> attackTargets = attackTargets(g, p);
+    List<String> roadTargets = roadTargets(g, p);
+    return new LegalActions(
+        actions,
+        movementTargets,
+        buildTargets,
+        attackTargets,
+        visibleActions(g, p, playerId, movementTargets, buildTargets, roadTargets, attackTargets));
+  }
+
+  private List<LegalActionDto> visibleActions(
+      GameState g,
+      PlayerState p,
+      UUID playerId,
+      List<String> movementTargets,
+      List<String> buildTargets,
+      List<String> roadTargets,
+      List<String> attackTargets) {
+    if (g.phase != GamePhase.PLAYER_TURNS || currentTurnPlayerId(g).map(id -> !id.equals(playerId)).orElse(true)) {
+      return List.of();
+    }
+    List<String> exploreTargets = exploreTargets(g, p);
+    List<String> friendlyTargets = friendlyTargets(p);
+    List<LegalActionDto> result = new ArrayList<>();
+    result.add(action("MOVE_HERO", "Move Hero", "Move your Hero 1 hex.", 1, Resources.none(),
+        p.basicActionPoints >= 1 && !movementTargets.isEmpty(), apOrTargetReason(p, 1, movementTargets),
+        true, TargetType.HEX, movementTargets));
+    int exploreCost = p.selectedAction == ActionType.EXPLORE && !p.freeExploreUsed ? 0 : 1;
+    result.add(action("EXPLORE_HEX", "Explore Hex", "Explore current or nearby terrain.", exploreCost,
+        Resources.none(), p.basicActionPoints >= exploreCost && !exploreTargets.isEmpty(),
+        apOrTargetReason(p, exploreCost, exploreTargets), true, TargetType.HEX, exploreTargets));
+    int deepCost = p.selectedAction == ActionType.EXPLORE ? 1 : 2;
+    result.add(action("DEEP_EXPLORE", "Deep Explore", "Spend more time for better exploration odds.", deepCost,
+        Resources.none(), p.basicActionPoints >= deepCost && !exploreTargets.isEmpty(),
+        apOrTargetReason(p, deepCost, exploreTargets), true, TargetType.HEX, exploreTargets));
+    result.add(action("BUILD_ROAD", "Build Road", "Build a road from your network.", 1,
+        new Resources(1, 0, 0, 1, 0), p.basicActionPoints >= 1 && !roadTargets.isEmpty(),
+        apOrTargetReason(p, 1, roadTargets), true, TargetType.HEX, roadTargets));
+    result.add(action("BUILD_OUTPOST", "Build Outpost", "Found an outpost on a legal hex.", p.selectedAction == ActionType.BUILD ? 1 : 2,
+        new Resources(1, 0, 0, 1, 0), p.basicActionPoints >= (p.selectedAction == ActionType.BUILD ? 1 : 2) && !buildTargets.isEmpty(),
+        apOrTargetReason(p, p.selectedAction == ActionType.BUILD ? 1 : 2, buildTargets), true, TargetType.FRIENDLY_HEX, buildTargets));
+    int recruitCost = p.selectedAction == ActionType.RECRUIT && !p.freeMilitiaUsed ? 0 : 1;
+    result.add(action("RECRUIT", "Recruit Militia", "Add one Militia.", recruitCost,
+        new Resources(0, 1, 0, 0, 0), p.basicActionPoints >= recruitCost && p.resources.food() >= 1,
+        p.resources.food() < 1 ? "You need 1 Food." : p.basicActionPoints < recruitCost ? "Not enough AP." : null,
+        false, TargetType.NONE, List.of()));
+    result.add(action("BANK_TRADE", "Bank Trade", "Convert resources through the bank.", 1, Resources.none(),
+        p.basicActionPoints >= 1, p.basicActionPoints < 1 ? "You need 1 AP." : null, false, TargetType.NONE, List.of()));
+    result.add(action("BUY_MARKET_CARD", "Buy Card", "Buy one visible market card.", p.selectedAction == ActionType.TRADE && !p.freeTradeCardBuyUsed ? 0 : 1,
+        Resources.none(), p.basicActionPoints >= (p.selectedAction == ActionType.TRADE && !p.freeTradeCardBuyUsed ? 0 : 1) && !g.market.isEmpty(),
+        g.market.isEmpty() ? "No market cards are available." : null, false, TargetType.CARD, List.of()));
+    result.add(action("SMALL_RAID", "Small Raid", "A 1 AP raid against an adjacent enemy or monster.", 1,
+        Resources.none(), p.basicActionPoints >= 1 && !attackTargets.isEmpty(),
+        apOrTargetReason(p, 1, attackTargets), true, TargetType.ENEMY_HEX, attackTargets));
+    int fullAttackCost = p.selectedAction == ActionType.ATTACK && !p.attackDiscountUsed ? 1 : 2;
+    boolean fullAttackAvailable = p.selectedAction == ActionType.ATTACK && p.basicActionPoints >= fullAttackCost && !attackTargets.isEmpty();
+    result.add(action("FULL_ATTACK", "Full Attack", "A stronger attack that requires the ATTACK card.", fullAttackCost,
+        Resources.none(), fullAttackAvailable,
+        p.selectedAction != ActionType.ATTACK ? "Requires ATTACK action card." : apOrTargetReason(p, fullAttackCost, attackTargets),
+        true, TargetType.ENEMY_HEX, attackTargets));
+    addHeroActions(result, g, p, exploreTargets, friendlyTargets, roadTargets, attackTargets, movementTargets);
+    result.add(action("END_PLAYER_TURN", "End Turn", "Finish your turn now.", 0, Resources.none(),
+        true, null, false, TargetType.NONE, List.of()));
+    return result;
+  }
+
+  private List<LegalActionDto> defenderReactionActions(GameState g, UUID playerId) {
+    if (g.pendingConflict == null || !g.pendingConflict.defenderPlayerId().equals(playerId)) {
+      return List.of();
+    }
+    return List.of(
+        action("DEFENDER_REACTION_SHIELD", "Shield", "Reduce or block incoming damage/resource loss.", 0,
+            Resources.none(), true, null, false, TargetType.NONE, List.of()),
+        action("DEFENDER_REACTION_COUNTERATTACK", "Counterattack", "Risky response; can punish a failed attack.", 0,
+            Resources.none(), true, null, false, TargetType.NONE, List.of()),
+        action("DEFENDER_REACTION_EVACUATION", "Evacuation", "Avoid the worst effect but lose a smaller guaranteed amount.", 0,
+            Resources.none(), true, null, false, TargetType.NONE, List.of()),
+        action("DEFENDER_REACTION_NONE", "No Reaction", "Accept the attack and conserve defenses.", 0,
+            Resources.none(), true, null, false, TargetType.NONE, List.of()));
+  }
+
+  private void addHeroActions(
+      List<LegalActionDto> result,
+      GameState g,
+      PlayerState p,
+      List<String> exploreTargets,
+      List<String> friendlyTargets,
+      List<String> roadTargets,
+      List<String> attackTargets,
+      List<String> movementTargets) {
+    if (p.hero == null) return;
+    switch (p.hero.heroClass()) {
+      case PRIEST -> {
+        result.add(action("PRIEST_HEAL", "Heal", "Restore 1 HP or remove unit damage.", 1,
+            Map.of("grace", 1), p.basicActionPoints >= 1 && p.hero.grace() >= 1 && hasDamagedFriendly(p),
+            p.hero.grace() < 1 ? "You need 1 Grace." : p.basicActionPoints < 1 ? "You need 1 AP." : !hasDamagedFriendly(p) ? "No damaged friendly target nearby." : null,
+            true, TargetType.HERO, friendlyTargets));
+        result.add(action("PRIEST_BLESS", "Bless", "Next d20 roll gets +2.", 1,
+            Map.of("grace", 1), p.basicActionPoints >= 1 && p.hero.grace() >= 1,
+            p.hero.grace() < 1 ? "You need 1 Grace." : p.basicActionPoints < 1 ? "You need 1 AP." : null,
+            true, TargetType.HERO, friendlyTargets));
+        result.add(action("PRIEST_SANCTUARY", "Sanctuary", "Protect a friendly Hero from the next direct wound.", 2,
+            Map.of("grace", 2), p.basicActionPoints >= 2 && p.hero.grace() >= 2,
+            p.hero.grace() < 2 ? "You need 2 Grace." : p.basicActionPoints < 2 ? "You need 2 AP." : null,
+            true, TargetType.HERO, friendlyTargets));
+      }
+      case MAGE -> {
+        result.add(action("ARCANE_BOLT", "Arcane Bolt", "d20 + 2 magical attack against a monster.", 1,
+            Map.of("mana", 1), p.basicActionPoints >= 1 && p.hero.mana() >= 1 && !attackTargets.isEmpty(),
+            p.hero.mana() < 1 ? "You need 1 Mana." : p.basicActionPoints < 1 ? "You need 1 AP." : attackTargets.isEmpty() ? "No valid target in range." : null,
+            true, TargetType.MONSTER_HEX, attackTargets));
+        result.add(action("MAGE_WARD", "Ward", "+2 Defense against the next attack.", 1,
+            Map.of("mana", 1), p.basicActionPoints >= 1 && p.hero.mana() >= 1,
+            p.hero.mana() < 1 ? "You need 1 Mana." : p.basicActionPoints < 1 ? "You need 1 AP." : null,
+            true, TargetType.FRIENDLY_HEX, friendlyTargets));
+        result.add(action("MAGE_REVEAL", "Reveal", "Preview an adjacent exploration category.", 1,
+            Map.of("mana", 1), p.basicActionPoints >= 1 && p.hero.mana() >= 1 && !exploreTargets.isEmpty(),
+            p.hero.mana() < 1 ? "You need 1 Mana." : p.basicActionPoints < 1 ? "You need 1 AP." : "No adjacent explorable hex.",
+            true, TargetType.HEX, exploreTargets));
+        result.add(action("TRANSMUTE", "Transmute", "Convert 1 owned resource into another.", 1,
+            Map.of("mana", 1), p.basicActionPoints >= 1 && p.hero.mana() >= 1 && totalResources(p.resources) > 0,
+            p.hero.mana() < 1 ? "You need 1 Mana." : p.basicActionPoints < 1 ? "You need 1 AP." : "You have no resources to convert.",
+            false, TargetType.NONE, List.of()));
+      }
+      case KNIGHT -> result.add(action("CHALLENGE", "Command Attack", "Passive: +2 Attack Total during Full Attack.", 0,
+          Resources.none(), true, null, false, TargetType.NONE, List.of()));
+      case MERCHANT -> result.add(action("MARKET_DEAL", "Market Deal", "Improved 3:1 bank trade. TRADE card can make it 2:1 once.", 1,
+          Resources.none(), p.basicActionPoints >= 1, p.basicActionPoints < 1 ? "You need 1 AP." : null,
+          false, TargetType.NONE, List.of()));
+      case RANGER -> {
+        result.add(action("SCOUT", "Scout", "Preview a nearby exploration result.", p.selectedAction == ActionType.EXPLORE ? 0 : 1,
+            Resources.none(), !exploreTargets.isEmpty(), exploreTargets.isEmpty() ? "No adjacent explorable hex." : null,
+            true, TargetType.HEX, exploreTargets));
+        result.add(action("SWIFT_MOVE", "Swift Move", "Move Hero 1 extra hex once per turn.", 0,
+            Resources.none(), !p.swiftMoveUsed && !movementTargets.isEmpty(),
+            p.swiftMoveUsed ? "Swift Move already used." : movementTargets.isEmpty() ? "No valid movement target." : null,
+            true, TargetType.HEX, movementTargets));
+      }
+      case ENGINEER -> {
+        result.add(action("QUICK_ROAD", "Quick Road", "Build one road for 0 AP once per turn.", 0,
+            new Resources(1, 0, 0, 1, 0), !p.quickRoadUsed && !roadTargets.isEmpty(),
+            p.quickRoadUsed ? "Quick Road already used." : apOrTargetReason(p, 0, roadTargets),
+            true, TargetType.HEX, roadTargets));
+        result.add(action("REPAIR", "Repair", "Repair 1 damage once per turn.", 0,
+            Resources.none(), !p.repairUsed, p.repairUsed ? "Repair already used." : null,
+            true, TargetType.FRIENDLY_HEX, friendlyTargets));
+      }
+    }
   }
 
   private Optional<UUID> currentTurnPlayerId(GameState g) {
+    if (g.phase == GamePhase.WAITING_FOR_DEFENDER_REACTION && g.pendingConflict != null) {
+      return Optional.of(g.pendingConflict.defenderPlayerId());
+    }
     if (g.phase != GamePhase.PLAYER_TURNS || g.players.isEmpty()) return Optional.empty();
     if (!g.actionTurnOrder.isEmpty() && g.actionTurnOrderIndex < g.actionTurnOrder.size()) {
       return Optional.of(g.actionTurnOrder.get(g.actionTurnOrderIndex));
@@ -231,6 +394,129 @@ public class GameApplicationService {
         && g.monsters.stream().noneMatch(m -> m.location().equals(h.coordinate()))
         && g.players.stream().flatMap(x -> x.settlements.stream())
             .allMatch(s -> s.location().distanceTo(h.coordinate()) >= 2);
+  }
+
+  private LegalActionDto action(
+      String actionType,
+      String label,
+      String description,
+      int apCost,
+      Resources resourceCost,
+      boolean available,
+      String disabledReason,
+      boolean requiresTarget,
+      TargetType targetType,
+      List<String> hexTargets) {
+    return action(
+        actionType,
+        label,
+        description,
+        apCost,
+        Map.of(
+            "wood", resourceCost.wood(),
+            "food", resourceCost.food(),
+            "ore", resourceCost.ore(),
+            "stone", resourceCost.stone(),
+            "gold", resourceCost.gold()),
+        available,
+        disabledReason,
+        requiresTarget,
+        targetType,
+        hexTargets);
+  }
+
+  private LegalActionDto action(
+      String actionType,
+      String label,
+      String description,
+      int apCost,
+      Map<String, Integer> resourceCost,
+      boolean available,
+      String disabledReason,
+      boolean requiresTarget,
+      TargetType targetType,
+      List<String> hexTargets) {
+    return new LegalActionDto(
+        actionType,
+        label,
+        description,
+        apCost,
+        resourceCost,
+        available,
+        available ? null : disabledReason,
+        requiresTarget,
+        targetType,
+        hexTargets,
+        List.of(),
+        List.of());
+  }
+
+  private String apOrTargetReason(PlayerState p, int cost, List<String> targets) {
+    if (p.basicActionPoints < cost) return "You only have " + p.basicActionPoints + " AP remaining.";
+    if (targets.isEmpty()) return "No valid target.";
+    return null;
+  }
+
+  private List<String> exploreTargets(GameState g, PlayerState p) {
+    if (p.hero == null || p.hero.location() == null) return List.of();
+    int range = p.hero.heroClass() == HeroClass.RANGER ? 2 : 1;
+    return g.map.stream()
+        .filter(h -> p.hero.location().distanceTo(h.coordinate()) <= range)
+        .filter(h -> !p.exploredHexes.contains(h.coordinate()))
+        .map(h -> hexId(h.coordinate()))
+        .toList();
+  }
+
+  private List<String> attackTargets(GameState g, PlayerState p) {
+    if (p.hero == null || p.hero.location() == null) return List.of();
+    return g.map.stream()
+        .filter(h -> p.hero.location().distanceTo(h.coordinate()) == 1)
+        .filter(h -> g.monsters.stream().anyMatch(m -> m.location().equals(h.coordinate()))
+            || g.players.stream()
+                .filter(other -> !other.id.equals(p.id))
+                .flatMap(other -> other.settlements.stream())
+                .anyMatch(s -> s.location().equals(h.coordinate())))
+        .map(h -> hexId(h.coordinate()))
+        .toList();
+  }
+
+  private List<String> friendlyTargets(PlayerState p) {
+    List<String> targets = new ArrayList<>();
+    if (p.hero != null && p.hero.location() != null) targets.add(hexId(p.hero.location()));
+    p.settlements.stream().map(SettlementState::location).map(this::hexId).forEach(targets::add);
+    return targets.stream().distinct().toList();
+  }
+
+  private List<String> buildTargets(GameState g, PlayerState p) {
+    return g.map.stream()
+        .filter(h -> building.outpostLegal(g, p, h.coordinate()))
+        .map(h -> hexId(h.coordinate()))
+        .toList();
+  }
+
+  private List<String> roadTargets(GameState g, PlayerState p) {
+    List<HexCoordinate> sources = new ArrayList<>();
+    p.settlements.stream().map(SettlementState::location).forEach(sources::add);
+    p.roads.stream().flatMap(road -> java.util.stream.Stream.of(road.from(), road.to())).forEach(sources::add);
+    return sources.stream()
+        .distinct()
+        .flatMap(source -> source.neighbors().stream()
+            .filter(target -> building.roadLegal(g, p, source, target)))
+        .map(this::hexId)
+        .distinct()
+        .toList();
+  }
+
+  private boolean hasDamagedFriendly(PlayerState p) {
+    return (p.hero != null && p.hero.hp() < 3) || p.units.stream().anyMatch(UnitState::wounded);
+  }
+
+  private int totalResources(Resources resources) {
+    return resources.wood() + resources.food() + resources.ore() + resources.stone() + resources.gold();
+  }
+
+  private String hexId(HexCoordinate coordinate) {
+    return coordinate.q() + "," + coordinate.r();
   }
 
   public List<Card> cards() {
@@ -288,6 +574,9 @@ public class GameApplicationService {
       case "BANK_TRADE" ->
           new GameCommand.BankTrade(
               ResourceType.valueOf(text(p, "give")), ResourceType.valueOf(text(p, "receive")));
+      case "MARKET_DEAL" ->
+          new GameCommand.MarketDeal(
+              ResourceType.valueOf(text(p, "give")), ResourceType.valueOf(text(p, "receive")));
       case "PROPOSE_TRADE" -> new GameCommand.ProposeTrade(
           UUID.fromString(text(p, "targetPlayerId")), resources(p, "offeredResources"),
           resources(p, "requestedResources"), p.path("offeredGold").asInt(0),
@@ -296,11 +585,32 @@ public class GameApplicationService {
       case "REJECT_TRADE" -> new GameCommand.RejectTrade(UUID.fromString(text(p, "proposalId")));
       case "CANCEL_TRADE" -> new GameCommand.CancelTrade(UUID.fromString(text(p, "proposalId")));
       case "EXPLORE", "EXPLORE_HEX" -> new GameCommand.Explore(coord(p, "target"));
+      case "DEEP_EXPLORE" -> new GameCommand.DeepExplore(coord(p, "target"));
       case "MOVE_HERO" -> new GameCommand.MoveHero(coord(p, "to"));
+      case "SWIFT_MOVE" -> new GameCommand.SwiftMove(coord(p, "to"));
       case "ATTACK", "START_ATTACK" ->
           new GameCommand.Attack(
               coord(p, "target"),
               p.hasNonNull("reaction") ? ReactionType.valueOf(text(p, "reaction")) : null);
+      case "FULL_ATTACK" ->
+          new GameCommand.Attack(
+              coord(p, "target"),
+              p.hasNonNull("reaction") ? ReactionType.valueOf(text(p, "reaction")) : null);
+      case "SMALL_RAID" -> new GameCommand.SmallRaid(coord(p, "target"));
+      case "DEFENDER_REACTION", "CHOOSE_DEFENDER_REACTION" ->
+          new GameCommand.DefenderReaction(ReactionType.valueOf(text(p, "reaction")));
+      case "PRIEST_HEAL" -> new GameCommand.PriestHeal(coord(p, "target"));
+      case "PRIEST_BLESS" -> new GameCommand.PriestBless(coord(p, "target"));
+      case "PRIEST_SANCTUARY" -> new GameCommand.PriestSanctuary(coord(p, "target"));
+      case "ARCANE_BOLT" -> new GameCommand.ArcaneBolt(coord(p, "target"));
+      case "MAGE_WARD" -> new GameCommand.MageWard(coord(p, "target"));
+      case "MAGE_REVEAL" -> new GameCommand.MageReveal(coord(p, "target"));
+      case "TRANSMUTE" ->
+          new GameCommand.Transmute(
+              ResourceType.valueOf(text(p, "give")), ResourceType.valueOf(text(p, "receive")));
+      case "SCOUT" -> new GameCommand.Scout(coord(p, "target"));
+      case "QUICK_ROAD" -> new GameCommand.QuickRoad(coord(p, "from"), coord(p, "to"));
+      case "REPAIR" -> new GameCommand.Repair(coord(p, "target"));
       case "LOCK_ATTACK_PLAN" ->
           new GameCommand.LockAttackPlan(
               coord(p, "source"),

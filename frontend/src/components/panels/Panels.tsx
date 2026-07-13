@@ -99,7 +99,7 @@ export function RealmPanel({
 
       <DiceRoll value={game.lastRoll} rolling={rolling} />
 
-      <h3>Последние события</h3>
+      <h3>Журнал партии</h3>
       <EventLog events={game.eventLog} />
     </aside>
   );
@@ -107,11 +107,18 @@ export function RealmPanel({
 
 function EventLog({ events }: { events: string[] }) {
   const [filter, setFilter] = useState('ALL');
-  const filters = ['ALL', 'PRODUCTION', 'TRADE', 'BUILD', 'COMBAT', 'MONSTER', 'VICTORY'];
+  const filters = ['ALL', 'ECONOMY', 'BUILD', 'EXPLORE', 'COMBAT', 'TURN'];
+  const keywords: Record<string, string[]> = {
+    ECONOMY: ['gains', 'resource', 'Market Deal', 'transmuted', 'Roll'],
+    BUILD: ['built', 'recruited', 'repaired'],
+    EXPLORE: ['explored', 'scouted', 'revealed'],
+    COMBAT: ['attacked', 'Raid', 'Arcane Bolt', 'Damage', 'monster'],
+    TURN: ['Turn:', 'Round', 'finished'],
+  };
   const filtered =
     filter === 'ALL'
       ? events
-      : events.filter((event) => event.toUpperCase().includes(filter));
+      : events.filter((event) => keywords[filter]?.some((word) => event.includes(word)));
   return (
     <>
       <div className="log-filters" aria-label="Event log filters">
@@ -126,12 +133,14 @@ function EventLog({ events }: { events: string[] }) {
         ))}
       </div>
       <ol className="log">
-        {filtered
-          .slice(-6)
-          .reverse()
-          .map((event, index) => (
-            <li key={`${event}-${index}`}>{event.replaceAll('_', ' ').toLowerCase()}</li>
-          ))}
+        {filtered.length === 0 ? (
+          <li className="muted">No public events yet.</li>
+        ) : (
+          filtered
+            .slice(-18)
+            .reverse()
+            .map((event, index) => <li key={`${event}-${index}`}>{event}</li>)
+        )}
       </ol>
     </>
   );
@@ -247,6 +256,26 @@ export function PlayerPanel({ view }: { view?: PrivateView }) {
       </div>
 
       <h3>Карты руки</h3>
+      <h3>Private discoveries</h3>
+      <div className="private-discoveries">
+        {view.privateExplorationResults?.length ? (
+          view.privateExplorationResults
+            .slice(-5)
+            .reverse()
+            .map((result) => (
+              <article key={`${result.target.q},${result.target.r}-${result.type}`}>
+                <small>
+                  {result.target.q}, {result.target.r} · {result.type}
+                </small>
+                <span>{result.description}</span>
+              </article>
+            ))
+        ) : (
+          <em>No private discoveries yet</em>
+        )}
+      </div>
+
+      <h3>Cards in hand</h3>
       <div className="hand-list">
         {view.hand.length ? (
           view.hand.map((card) => (

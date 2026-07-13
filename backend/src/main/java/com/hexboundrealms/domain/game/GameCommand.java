@@ -25,6 +25,7 @@ public sealed interface GameCommand
         GameCommand.Recruit,
         GameCommand.Trade,
         GameCommand.BankTrade,
+        GameCommand.DeepExplore,
         GameCommand.ProposeTrade,
         GameCommand.AcceptTrade,
         GameCommand.RejectTrade,
@@ -32,6 +33,20 @@ public sealed interface GameCommand
         GameCommand.Explore,
         GameCommand.MoveHero,
         GameCommand.Attack,
+        GameCommand.SmallRaid,
+        GameCommand.DefenderReaction,
+        GameCommand.PriestHeal,
+        GameCommand.PriestBless,
+        GameCommand.PriestSanctuary,
+        GameCommand.ArcaneBolt,
+        GameCommand.MageWard,
+        GameCommand.MageReveal,
+        GameCommand.Transmute,
+        GameCommand.Scout,
+        GameCommand.SwiftMove,
+        GameCommand.QuickRoad,
+        GameCommand.Repair,
+        GameCommand.MarketDeal,
         GameCommand.LockAttackPlan,
         GameCommand.ResolveAttackBatch,
         GameCommand.Fortify,
@@ -73,6 +88,8 @@ public sealed interface GameCommand
 
   record BankTrade(ResourceType give, ResourceType receive) implements GameCommand {}
 
+  record DeepExplore(HexCoordinate target) implements GameCommand {}
+
   record ProposeTrade(
       UUID targetPlayerId,
       Resources offeredResources,
@@ -91,6 +108,34 @@ public sealed interface GameCommand
   record MoveHero(HexCoordinate to) implements GameCommand {}
 
   record Attack(HexCoordinate target, ReactionType reaction) implements GameCommand {}
+
+  record SmallRaid(HexCoordinate target) implements GameCommand {}
+
+  record DefenderReaction(ReactionType reaction) implements GameCommand {}
+
+  record PriestHeal(HexCoordinate target) implements GameCommand {}
+
+  record PriestBless(HexCoordinate target) implements GameCommand {}
+
+  record PriestSanctuary(HexCoordinate target) implements GameCommand {}
+
+  record ArcaneBolt(HexCoordinate target) implements GameCommand {}
+
+  record MageWard(HexCoordinate target) implements GameCommand {}
+
+  record MageReveal(HexCoordinate target) implements GameCommand {}
+
+  record Transmute(ResourceType give, ResourceType receive) implements GameCommand {}
+
+  record Scout(HexCoordinate target) implements GameCommand {}
+
+  record SwiftMove(HexCoordinate to) implements GameCommand {}
+
+  record QuickRoad(HexCoordinate from, HexCoordinate to) implements GameCommand {}
+
+  record Repair(HexCoordinate target) implements GameCommand {}
+
+  record MarketDeal(ResourceType give, ResourceType receive) implements GameCommand {}
 
   record LockAttackPlan(
       HexCoordinate source,
