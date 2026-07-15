@@ -64,6 +64,7 @@ export type Game = {
   name: string;
   seed: number;
   debugMode: boolean;
+  gameMode: 'STANDARD' | 'BEGINNER';
   status: string;
   phase: string;
   roundNumber: number;
@@ -109,13 +110,14 @@ export type ExplorationResult = {
   description: string;
 };
 export type CombatReportEntry = {
-  attackerId: string;
+  attackerId?: string;
   defenderId?: string;
   monsterId?: string;
   source: Coord;
   target: Coord;
   conflictType: string;
   roll: number;
+  defenseRoll?: number;
   attackTotal: number;
   defenseTotal: number;
   damage: number;

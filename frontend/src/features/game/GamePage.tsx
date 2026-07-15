@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { api } from '../../api/client';
@@ -10,6 +10,7 @@ import { PlayerPanel, RealmPanel } from '../../components/panels/Panels';
 import { ActionButton } from '../../components/actions/ActionButton';
 import { BankTradePanel, PendingTradesPanel } from '../../components/trade/TradePanels';
 import { useUi } from '../../store/ui';
+import { heroCardArt } from '../../assets/gameAssets';
 import type {
   Coord,
   Game,
@@ -167,14 +168,17 @@ export function GamePage() {
     refetchInterval: 15000,
   });
   const game = gameQuery.data;
-  const seats = useMemo<Seat[]>(
-    () => JSON.parse(localStorage.getItem(`seats:${id}`) ?? '[]'),
-    [id],
+  const [seats, setSeats] = useState<Seat[]>(() =>
+    JSON.parse(localStorage.getItem(`seats:${id}`) ?? '[]'),
   );
-
-  const [seat, setSeat] = useState<Seat>();
+  const [seat, setSeat] = useState<Seat | undefined>(() =>
+    JSON.parse(localStorage.getItem(`seat:${id}`) ?? 'null') ?? undefined,
+  );
+  const [isHost] = useState(() => localStorage.getItem(`host:${id}`) === 'true');
   const [view, setView] = useState<PrivateView>();
   const [handover, setHandover] = useState<Seat>();
+  const [joinName, setJoinName] = useState('');
+  const [joinColor, setJoinColor] = useState('BLUE');
   const [rulesOpen, setRulesOpen] = useState(false);
   const [rolling, setRolling] = useState(false);
   const [error, setError] = useState('');
@@ -189,6 +193,24 @@ export function GamePage() {
   useEffect(() => {
     localStorage.setItem('hexbound:guidance', guidanceLevel);
   }, [guidanceLevel]);
+
+  useEffect(() => {
+    if (!game || !seat) return;
+    api.private(id, seat).then(setView).catch(() => {
+      localStorage.removeItem(`seat:${id}`);
+      setSeat(undefined);
+      setView(undefined);
+    });
+  }, [game?.version, id, seat?.playerId]);
+
+  useEffect(() => {
+    if (game?.status !== 'LOBBY') return;
+    const colors = ['BLUE', 'RED', 'GREEN', 'GOLD'];
+    const taken = new Set(game.players.map((player) => player.color));
+    if (taken.has(joinColor)) {
+      setJoinColor(colors.find((color) => !taken.has(color)) ?? joinColor);
+    }
+  }, [game?.players, game?.status, joinColor]);
 
   const legalQuery = useQuery({
     queryKey: ['legal', id, seat?.playerId, game?.version],
@@ -252,9 +274,13 @@ export function GamePage() {
           const player = updatedGame.players.find((item) => item.id === candidate.playerId);
           return player && !player.hasSelectedAction;
         });
-        setView(undefined);
-        setSeat(undefined);
-        setHandover(nextSeat ?? seats[0]);
+        if (nextSeat && nextSeat.playerId !== seat?.playerId && seats.length > 1) {
+          setView(undefined);
+          setSeat(undefined);
+          setHandover(nextSeat);
+          return;
+        }
+        if (seat) setView(await api.private(id, seat));
         return;
       }
 
@@ -264,9 +290,13 @@ export function GamePage() {
         const nextSeat = seats.find(
           (candidate) => candidate.playerId === draft.currentDraftPlayerId,
         );
-        setView(undefined);
-        setSeat(undefined);
-        if (nextSeat) setHandover(nextSeat);
+        if (nextSeat && nextSeat.playerId !== seat?.playerId && seats.length > 1) {
+          setView(undefined);
+          setSeat(undefined);
+          setHandover(nextSeat);
+          return;
+        }
+        if (seat) setView(await api.private(id, seat));
         return;
       }
 
@@ -278,7 +308,7 @@ export function GamePage() {
         const nextSeat = seats.find(
           (candidate) => candidate.playerId === updatedGame.currentStartingPlacementPlayerId,
         );
-        if (nextSeat && nextSeat.playerId !== seat?.playerId) {
+        if (nextSeat && nextSeat.playerId !== seat?.playerId && seats.length > 1) {
           setView(undefined);
           setSeat(undefined);
           setHandover(nextSeat);
@@ -290,7 +320,7 @@ export function GamePage() {
         const defenderSeat = seats.find(
           (candidate) => candidate.playerId === updatedGame.pendingConflict?.defenderPlayerId,
         );
-        if (defenderSeat && defenderSeat.playerId !== seat?.playerId) {
+        if (defenderSeat && defenderSeat.playerId !== seat?.playerId && seats.length > 1) {
           setView(undefined);
           setSeat(undefined);
           setHandover(defenderSeat);
@@ -302,7 +332,7 @@ export function GamePage() {
         const nextSeat = seats.find(
           (candidate) => candidate.playerId === updatedGame.currentTurnPlayerId,
         );
-        if (nextSeat && nextSeat.playerId !== seat?.playerId) {
+        if (nextSeat && nextSeat.playerId !== seat?.playerId && seats.length > 1) {
           setView(undefined);
           setSeat(undefined);
           setHandover(nextSeat);
@@ -318,16 +348,13 @@ export function GamePage() {
             !player.hasLockedAttackPlan,
         );
         const nextSeat = seats.find((candidate) => candidate.playerId === nextAttacker?.id);
-        setView(undefined);
-        setSeat(undefined);
-        setHandover(
-          nextSeat ??
-            seats.find(
-              (candidate) =>
-                candidate.playerId ===
-                updatedGame.players.find((p) => p.revealedAction === 'ATTACK')?.id,
-            ),
-        );
+        if (nextSeat && nextSeat.playerId !== seat?.playerId && seats.length > 1) {
+          setView(undefined);
+          setSeat(undefined);
+          setHandover(nextSeat);
+          return;
+        }
+        if (seat) setView(await api.private(id, seat));
         return;
       }
 
@@ -351,6 +378,59 @@ export function GamePage() {
     }
   }
 
+  async function joinLobby() {
+    if (!game) return;
+    try {
+      setError('');
+      const joined = await api.join(game.id, {
+        displayName: joinName.trim() || `Player ${game.players.length + 1}`,
+        playerColor: joinColor,
+      });
+      localStorage.setItem(`seat:${game.id}`, JSON.stringify(joined));
+      const nextSeats = [...seats.filter((item) => item.playerId !== joined.playerId), joined];
+      setSeats(nextSeats);
+      localStorage.setItem(`seats:${game.id}`, JSON.stringify(nextSeats));
+      setSeat(joined);
+      setView(await api.private(game.id, joined));
+      queryClient.invalidateQueries({ queryKey: ['game', id] });
+    } catch (cause) {
+      setError(readableError((cause as Error).message));
+    }
+  }
+
+  async function enterAsGuest(playerId: string) {
+    if (!game) return;
+    const player = game.players.find((item) => item.id === playerId);
+    if (!player) return;
+    try {
+      setError('');
+      const recovered = await api.guestLogin(
+        game.id,
+        { playerColor: player.color },
+        player.displayName,
+      );
+      localStorage.setItem(`seat:${game.id}`, JSON.stringify(recovered));
+      const nextSeats = [...seats.filter((item) => item.playerId !== recovered.playerId), recovered];
+      setSeats(nextSeats);
+      localStorage.setItem(`seats:${game.id}`, JSON.stringify(nextSeats));
+      setSeat(recovered);
+      setView(await api.private(game.id, recovered));
+    } catch (cause) {
+      setError(readableError((cause as Error).message));
+    }
+  }
+
+  async function startLobby() {
+    if (!game) return;
+    try {
+      setError('');
+      const updated = await api.start(game.id);
+      queryClient.setQueryData(['game', id], updated);
+    } catch (cause) {
+      setError(readableError((cause as Error).message));
+    }
+  }
+
   function send(type: string, payload?: unknown) {
     if (type === 'ROLL_WORLD') setRolling(true);
     setTargetingMode(undefined);
@@ -359,6 +439,146 @@ export function GamePage() {
 
   if (gameQuery.isLoading) return <main className="loading">Открываем долину…</main>;
   if (!game) return <main className="loading error">{(gameQuery.error as Error)?.message}</main>;
+
+  if (game.status === 'LOBBY' && game.phase === 'SETUP') {
+    const colors = ['BLUE', 'RED', 'GREEN', 'GOLD'];
+    const takenColors = new Set(game.players.map((player) => player.color));
+    const shareUrl = window.location.href;
+    const canJoin = !seat && game.players.length < 4 && !takenColors.has(joinColor);
+    return (
+      <main className="setup lobby-page">
+        <section className="setup-card lobby-card">
+          <p className="eyebrow">Lobby</p>
+          <h1>{game.name}</h1>
+          <p className="setup-lead">
+            Open this URL in up to four tabs. Each tab joins as one player and keeps its own private
+            profile.
+          </p>
+          <div className="lobby-link">
+            <input readOnly value={shareUrl} onFocus={(event) => event.currentTarget.select()} />
+            <button className="quiet-button" onClick={() => navigator.clipboard?.writeText(shareUrl)}>
+              Copy link
+            </button>
+          </div>
+          <div className="lobby-mode">
+            <b>{game.gameMode === 'BEGINNER' ? 'Beginner / Fast mode' : 'Standard mode'}</b>
+            <span>
+              {game.gameMode === 'BEGINNER'
+                ? '2 AP per turn. Production triggers more often.'
+                : '3 AP per turn. Normal production pace.'}
+            </span>
+          </div>
+          <div className="setup-players">
+            {colors.map((color) => {
+              const player = game.players.find((item) => item.color === color);
+              return (
+                <span key={color} className={player ? '' : 'empty-seat'}>
+                  <i className={`player-dot ${color.toLowerCase()}`} />
+                  {player?.displayName ?? `${color} seat open`}
+                  <small>{player ? 'Joined' : 'Waiting for player'}</small>
+                </span>
+              );
+            })}
+          </div>
+          {!seat ? (
+            <>
+              <div className="join-form">
+                <label>
+                  Your name
+                  <input
+                    value={joinName}
+                    onChange={(event) => setJoinName(event.target.value)}
+                    placeholder={`Player ${game.players.length + 1}`}
+                  />
+                </label>
+                <label>
+                  Color
+                  <select value={joinColor} onChange={(event) => setJoinColor(event.target.value)}>
+                    {colors.map((color) => (
+                      <option key={color} value={color} disabled={takenColors.has(color)}>
+                        {color}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className="primary" disabled={!canJoin} onClick={joinLobby}>
+                  Join as new guest
+                </button>
+              </div>
+              {game.players.length > 0 && (
+                <div className="guest-login-card">
+                  <b>Already joined from another tab?</b>
+                  <span>Choose your player to enter this lobby with a temporary guest token.</span>
+                  <div className="guest-player-grid">
+                    {game.players.map((player) => (
+                      <button key={player.id} onClick={() => enterAsGuest(player.id)}>
+                        <i className={`player-dot ${player.color.toLowerCase()}`} />
+                        <b>{player.displayName}</b>
+                        <small>{player.color}</small>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="lobby-you">
+              You joined as <b>{seat.displayName}</b>. Keep this tab for your private profile.
+            </p>
+          )}
+          {error && <p className="error">{error}</p>}
+          {isHost ? (
+            <button
+              className="primary large-button"
+              disabled={game.players.length === 0}
+              onClick={startLobby}
+            >
+              Start game with {game.players.length}/4 players
+            </button>
+          ) : (
+            <p className="lobby-waiting-host">
+              Waiting for the lobby host to start the game.
+            </p>
+          )}
+        </section>
+      </main>
+    );
+  }
+
+  if (!seat) {
+    const activeId =
+      game.currentStartingPlacementPlayerId ??
+      game.currentTurnPlayerId ??
+      getNextResolver(game)?.id ??
+      game.firstPlayerId;
+    const active = game.players.find((player) => player.id === activeId);
+    return (
+      <main className="setup identity-page">
+        <section className="setup-card lobby-card">
+          <p className="eyebrow">Enter game</p>
+          <h1>{game.name}</h1>
+          <p className="setup-lead">
+            This browser tab does not have a player token yet. Choose who you are for this tab.
+            Current turn: <b>{active?.displayName ?? 'not selected yet'}</b>.
+          </p>
+          <div className="guest-login-card">
+            <b>Enter as guest player</b>
+            <span>Use one tab per player. The tab will receive a temporary token for this game.</span>
+            <div className="guest-player-grid">
+              {game.players.map((player) => (
+                <button key={player.id} onClick={() => enterAsGuest(player.id)}>
+                  <i className={`player-dot ${player.color.toLowerCase()}`} />
+                  <b>{player.displayName}</b>
+                  <small>{active?.id === player.id ? 'Current turn' : player.heroClass ?? player.color}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+          {error && <p className="error">{error}</p>}
+        </section>
+      </main>
+    );
+  }
 
   const current = game.players.find((player) => player.id === seat?.playerId);
   const nextResolver = getNextResolver(game);
@@ -395,8 +615,10 @@ export function GamePage() {
           HEXBOUND <i>REALMS</i>
         </div>
         <span className={`phase-badge phase-${game.phase.toLowerCase()}`}>{game.phase.replaceAll('_', ' ')}</span>
+        <span className="header-meta">{game.gameMode === 'BEGINNER' ? 'Beginner · 2 AP' : 'Standard · 3 AP'}</span>
         <span className="header-meta">Round {game.roundNumber}</span>
-        <span className="header-meta">{activePlayer ? `Waiting for ${activePlayer.displayName}` : 'No active player'}</span>
+        <span className="header-meta">{current ? `You are ${current.displayName}` : 'Choose your player'}</span>
+        <span className="header-meta">{activePlayer ? `Now: ${activePlayer.displayName}` : 'No active player'}</span>
         {game.lastRoll && <span className="header-meta">Dice {game.lastRoll}</span>}
         <button className="victory-pill" onClick={() => setRulesOpen(true)}>
           Glory {Math.max(0, ...game.players.map((player) => player.glory ?? 0))}/10
@@ -426,7 +648,6 @@ export function GamePage() {
 
       <RealmPanel
         game={game}
-        rolling={rolling}
         guidanceLevel={guidanceLevel}
         view={view}
         invalidSelectionReason={invalidSelectionReason}
@@ -437,6 +658,7 @@ export function GamePage() {
           legal={legalTargets}
           overlayType={targetingMode?.actionType ?? targetingMode?.targetType}
           explainInvalid={(hex) => setInvalidSelectionReason(invalidHexReason(game, hex.terrain))}
+          rolling={rolling}
         />
       </section>
       <PlayerPanel view={view} />
@@ -457,6 +679,7 @@ export function GamePage() {
                   key={candidate.playerId}
                   className={seat?.playerId === candidate.playerId ? 'active' : ''}
                   onClick={() => {
+                    if (seat?.playerId === candidate.playerId) return;
                     setView(undefined);
                     setSeat(undefined);
                     setHandover(candidate);
@@ -474,7 +697,20 @@ export function GamePage() {
         {error && <div className="error-banner">{error}</div>}
 
         {!seat ? (
-          <div className="empty-controls">
+          <div className="empty-controls guest-login-panel">
+            <b>Enter as guest</b>
+            <span>Choose one existing player for this browser tab. The game will restore a temporary token for that player.</span>
+            <div className="guest-player-grid">
+              {game.players.map((player) => (
+                <button key={player.id} onClick={() => enterAsGuest(player.id)}>
+                  <i className={`player-dot ${player.color.toLowerCase()}`} />
+                  <b>{player.displayName}</b>
+                  <small>
+                    {activePlayer?.id === player.id ? 'Current turn' : player.heroClass ?? 'Joined'}
+                  </small>
+                </button>
+              ))}
+            </div>
             <b>Выберите игрока</b>
             <span>Личная информация появится только после подтверждения передачи устройства.</span>
           </div>
@@ -532,13 +768,15 @@ function CombatScene({ game }: { game: Game }) {
           const attacker = game.players.find((player) => player.id === entry.attackerId);
           const defender = game.players.find((player) => player.id === entry.defenderId);
           const monster = game.monsters.find((item) => item.id === entry.monsterId);
+          const monsterAttack = entry.conflictType === 'MONSTER_ATTACK';
+          const attackerName = monsterAttack ? (monster?.type ?? 'Monster') : (attacker?.displayName ?? 'Атакующий');
           const targetName =
-            defender?.displayName ?? monster?.type ?? (entry.monsterId ? 'Монстр' : 'Цель');
+            defender?.displayName ?? (monsterAttack ? 'Цель' : monster?.type) ?? (entry.monsterId ? 'Монстр' : 'Цель');
           return (
             <article key={`${entry.attackerId}-${index}`} className="combat-card">
-              <div className={`fighter ${attacker?.color.toLowerCase() ?? 'neutral'}`}>
-                <span>{heroInitial(attacker?.heroClass)}</span>
-                <b>{attacker?.displayName ?? 'Атакующий'}</b>
+              <div className={`fighter ${monsterAttack ? 'monster-side' : (attacker?.color.toLowerCase() ?? 'neutral')}`}>
+                <span>{monsterAttack ? 'M' : heroInitial(attacker?.heroClass)}</span>
+                <b>{attackerName}</b>
                 <small>
                   {entry.source.q},{entry.source.r}
                 </small>
@@ -548,7 +786,11 @@ function CombatScene({ game }: { game: Game }) {
                 <strong>
                   {entry.attackTotal} / {entry.defenseTotal}
                 </strong>
-                <span>d20: {entry.roll}</span>
+                <span>
+                  {entry.defenseRoll
+                    ? `d20: ${entry.roll} vs ${entry.defenseRoll}`
+                    : `d20: ${entry.roll}`}
+                </span>
                 <em>{conflictLabel(entry.conflictType)}</em>
               </div>
               <div className={`fighter defender ${defender?.color.toLowerCase() ?? 'neutral'}`}>
@@ -560,7 +802,7 @@ function CombatScene({ game }: { game: Game }) {
               </div>
               <p>
                 {entry.damage > 0
-                  ? `${attacker?.displayName ?? 'Атакующий'} нанёс ${entry.damage} урона.`
+                  ? `${attackerName} нанёс ${entry.damage} урона.`
                   : `${targetName} удержал позицию без урона.`}
                 {entry.unitDamage > 0 && ` Отряды получили: ${entry.unitDamage}.`}
                 {entry.settlementDamage > 0 &&
@@ -611,7 +853,10 @@ export function AvailableActionsPanel({
   const selectedValid = Boolean(
     activeTargetAction && selectedId && activeTargetAction.validTargetHexIds.includes(selectedId),
   );
-  const grouped = groupActions(actions);
+  const primaryActions = actions.filter(
+    (action) => action.actionType !== 'TRANSMUTE' && action.actionType !== 'BUY_MARKET_CARD',
+  );
+  const grouped = groupActions(primaryActions);
 
   return (
     <div className="available-actions-panel">
@@ -619,7 +864,8 @@ export function AvailableActionsPanel({
         <div>
           <p className="eyebrow">Available Actions</p>
           <h3>
-            {currentName} Turn · {activeCard} card · Action Points: {view.basicActionPoints} / 3
+            {currentName} Turn · {activeCard} card · Action Points: {view.basicActionPoints} /{' '}
+            {game.gameMode === 'BEGINNER' ? 2 : 3}
           </h3>
         </div>
         {view.basicActionPoints === 0 && <span className="ap-empty">End Turn recommended</span>}
@@ -650,6 +896,34 @@ export function AvailableActionsPanel({
         </section>
       )}
 
+      {actions.some((action) => action.actionType === 'TRANSMUTE') && (
+        <section className="transmute-picker">
+          <div>
+            <b>Mage Transmute</b>
+            <span>Choose exactly which resource becomes another one.</span>
+          </div>
+          <label>
+            Give
+            <select value={offerType} onChange={(event) => setOfferType(event.target.value as keyof Resources)}>
+              {resourceOptions(view.resources)}
+            </select>
+          </label>
+          <label>
+            Receive
+            <select value={requestType} onChange={(event) => setRequestType(event.target.value as keyof Resources)}>
+              {resourceOptions()}
+            </select>
+          </label>
+          <button
+            className="primary"
+            disabled={busy || offerType === requestType || view.resources[offerType] < 1}
+            onClick={() => send('TRANSMUTE', { give: offerType.toUpperCase(), receive: requestType.toUpperCase() })}
+          >
+            Transmute
+          </button>
+        </section>
+      )}
+
       <div className="action-groups">
         {Object.entries(grouped).map(([group, items]) => (
           <section className="action-group" key={group}>
@@ -658,9 +932,10 @@ export function AvailableActionsPanel({
               {items.map((action) => (
                 <button
                   key={action.actionType}
-                  className={`available-action ${action.available ? '' : 'disabled'}`}
-                  disabled={busy || !action.available}
+                  className={`available-action ${action.available ? '' : 'disabled'} ${action.actionType === 'CHALLENGE' ? 'passive' : ''}`}
+                  disabled={busy || !action.available || action.actionType === 'CHALLENGE'}
                   onClick={() => {
+                    if (action.actionType === 'CHALLENGE') return;
                     if (action.requiresTarget) {
                       setTargetingMode?.({
                         actionType: action.actionType,
@@ -681,7 +956,13 @@ export function AvailableActionsPanel({
                       <em>Disabled: {action.disabledReason}</em>
                     )}
                   </span>
-                  <strong>{action.available ? `${action.apCost} AP` : 'Unavailable'}</strong>
+                  <strong>
+                    {action.actionType === 'CHALLENGE'
+                      ? 'Passive'
+                      : action.available
+                        ? `${action.apCost} AP`
+                        : 'Unavailable'}
+                  </strong>
                   {resourceCostText(action) && <i>{resourceCostText(action)}</i>}
                 </button>
               ))}
@@ -810,10 +1091,10 @@ export function PhaseControls({
         <div className="waiting-turn defender-wait">
           <span>🛡</span>
           <div>
-            <b>Pass the device to {defender?.displayName ?? 'the defending player'}</b>
+            <b>Defender reaction: {defender?.displayName ?? 'the defending player'}</b>
             <p>
               {attacker?.displayName ?? 'The attacker'} declared {conflict.attackType.replace('_', ' ')} at{' '}
-              {conflict.target.q},{conflict.target.r}. Defender reaction is private.
+              {conflict.target.q},{conflict.target.r}. The defender chooses privately in their own tab.
             </p>
           </div>
         </div>
@@ -845,6 +1126,19 @@ export function PhaseControls({
             <b>No Reaction</b>
             <span>Accept the attack and conserve defenses.</span>
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (game.phase === 'PLAYER_TURNS' && game.currentTurnPlayerId && game.currentTurnPlayerId !== view.playerId) {
+    const active = game.players.find((player) => player.id === game.currentTurnPlayerId);
+    return (
+      <div className="waiting-turn turn-wait">
+        <span>⏳</span>
+        <div>
+          <b>Сейчас ход {active?.displayName ?? 'другого игрока'}</b>
+          <p>Вы играете за {currentName ?? 'своего игрока'}. Действия появятся автоматически, когда ход перейдёт к вам.</p>
         </div>
       </div>
     );
@@ -1043,8 +1337,8 @@ export function PhaseControls({
                   <small>{card.category}</small>
                   <b>{card.name}</b>
                   <p>{card.effect}</p>
-                  <em>{card.cost.gold} золота</em>
-                  <span>{affordable ? 'Купить' : 'Не хватает золота'}</span>
+                  <em>Cost: {card.cost.gold} gold</em>
+                  <span>{affordable ? `Buy for ${card.cost.gold} gold` : `Need ${card.cost.gold} gold`}</span>
                 </button>
               );
             })}
@@ -1267,6 +1561,7 @@ function HeroDraftControls({
             disabled={busy || !isCurrentPlayer}
             onClick={() => send('SELECT_HERO', { heroClass: hero.id })}
           >
+            <img className="hero-card-art" src={heroCardArt[hero.id]} alt="" />
             <div>
               <b>{hero.name}</b>
               <em>{hero.role}</em>

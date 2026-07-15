@@ -94,8 +94,8 @@ public final class DefaultGameEngine implements GameEngine {
 
   private void start(GameState g, List<DomainEvent> e) {
     phase(g, GamePhase.SETUP);
-    if (g.players.size() < 3 || g.players.size() > 4)
-      throw DomainException.of("INVALID_PLAYER_COUNT", "Hexbound Realms needs 3–4 players");
+    if (g.players.isEmpty() || g.players.size() > 4)
+      throw DomainException.of("INVALID_PLAYER_COUNT", "Hexbound Realms needs 1-4 players");
     List<UUID> initialOrder = new ArrayList<>(g.players.stream().map(p -> p.id).toList());
     Collections.shuffle(initialOrder, new Random(g.seed));
     List<UUID> draftOrder = new ArrayList<>(initialOrder);
@@ -104,6 +104,7 @@ public final class DefaultGameEngine implements GameEngine {
     g.players.sort(Comparator.comparingInt(p -> initialOrder.indexOf(p.id)));
     g.firstPlayerIndex = 0;
     g.currentHeroDraftIndex = 0;
+    g.status = GameStatus.ACTIVE;
     g.phase = GamePhase.HERO_SELECTION;
     e.add(new DomainEvent("HERO_SELECTION_STARTED", Map.of("turnOrder", initialOrder)));
   }
@@ -253,7 +254,7 @@ public final class DefaultGameEngine implements GameEngine {
       GameState g, PlayerState p, GameCommand.ProposeHeroSwap c, List<DomainEvent> e) {
     if (g.phase != GamePhase.HERO_REVEAL && g.phase != GamePhase.STARTING_PLACEMENT)
       throw DomainException.of("INVALID_PHASE", "Hero swaps are only available before placement");
-    if (g.status == GameStatus.ACTIVE)
+    if (g.phase == GamePhase.STARTING_PLACEMENT)
       throw DomainException.of("PLACEMENT_ALREADY_STARTED", "Heroes cannot swap after placement begins");
     PlayerState target =
         g.players.stream()
@@ -315,13 +316,69 @@ public final class DefaultGameEngine implements GameEngine {
       g.phase = GamePhase.MONSTER_EVENT;
       MonsterState monster = monsters.spawn(g, p);
       e.add(event("MONSTER_SPAWNED", "monsterId", monster.id()));
+      monsterAttack(g, monster, p, e);
     } else {
-      ProductionResolver.ProductionReport report = production.resolve(g, roll);
+      ProductionResolver.ProductionReport report =
+          production.resolve(g, roll, g.gameMode == GameMode.BEGINNER);
       g.phase = GamePhase.PRODUCTION;
       e.add(
           new DomainEvent(
               "PRODUCTION_RESOLVED", Map.of("roll", roll, "production", report.production())));
     }
+  }
+
+  private void monsterAttack(GameState g, MonsterState monster, PlayerState target, List<DomainEvent> e) {
+    if (target.settlements.isEmpty()) return;
+    SettlementState attacked =
+        target.settlements.stream()
+            .min(Comparator.comparingInt(s -> s.location().distanceTo(monster.location())))
+            .orElseThrow();
+    int roll = die(g, 20);
+    int monsterBonus = Math.max(0, monster.strength() - 10);
+    int defenseTotal = 10 + target.fortificationTokens * 2;
+    int attackTotal = roll + monsterBonus;
+    int margin = attackTotal - defenseTotal;
+    int damage = margin < 0 ? 0 : margin < 5 ? 1 : 2;
+    if (roll == 20) damage++;
+    if (roll == 1) damage = 0;
+    applySettlementDamage(target, attacked.location(), damage);
+    g.lastCombatReport =
+        List.of(
+            new CombatReportEntry(
+                null,
+                target.id,
+                monster.id(),
+                monster.location(),
+                attacked.location(),
+                "MONSTER_ATTACK",
+                roll,
+                null,
+                attackTotal,
+                defenseTotal,
+                damage,
+                0,
+                damage,
+                0));
+    e.add(
+        new DomainEvent(
+            "MONSTER_ATTACKED",
+            Map.of(
+                "monsterId",
+                monster.id(),
+                "monsterType",
+                monster.type(),
+                "playerId",
+                target.id,
+                "target",
+                attacked.location(),
+                "roll",
+                roll,
+                "attackTotal",
+                attackTotal,
+                "defenseTotal",
+                defenseTotal,
+                "damage",
+                damage)));
   }
 
   private void buyMarketCard(
@@ -394,14 +451,20 @@ public final class DefaultGameEngine implements GameEngine {
 
   private void buildRoad(GameState g, PlayerState p, GameCommand.BuildRoad c, List<DomainEvent> e) {
     boolean turn = g.phase == GamePhase.PLAYER_TURNS;
+    Resources cost = new Resources(1, 0, 0, 1, 0);
     if (turn) {
       requireCurrentTurn(g, p);
+      requireResources(p, cost);
+      if (!building.roadLegal(g, p, c.from(), c.to()))
+        throw DomainException.of("INVALID_TARGET", "Road must extend your connected network");
       spendActionPoints(p, roadActionPointCost(p));
-    } else resolutionAction(g, p, ActionType.BUILD);
-    Resources cost = new Resources(1, 0, 0, 1, 0);
-    if (!building.roadLegal(g, p, c.from(), c.to()))
-      throw DomainException.of("INVALID_TARGET", "Road must extend your connected network");
-    p.resources = p.resources.subtract(cost);
+    } else {
+      requireResources(p, cost);
+      if (!building.roadLegal(g, p, c.from(), c.to()))
+        throw DomainException.of("INVALID_TARGET", "Road must extend your connected network");
+      resolutionAction(g, p, ActionType.BUILD);
+    }
+    spendResources(p, cost);
     p.roads.add(new RoadState(UUID.randomUUID(), c.from(), c.to()));
     if (turn)
       e.add(
@@ -413,14 +476,20 @@ public final class DefaultGameEngine implements GameEngine {
   private void buildOutpost(
       GameState g, PlayerState p, GameCommand.BuildOutpost c, List<DomainEvent> e) {
     boolean turn = g.phase == GamePhase.PLAYER_TURNS;
+    Resources cost = new Resources(1, 1, 0, 1, 0);
     if (turn) {
       requireCurrentTurn(g, p);
+      requireResources(p, cost);
+      if (!building.outpostLegal(g, p, c.at()))
+        throw DomainException.of("INVALID_TARGET", "Outpost target is not legal");
       spendActionPoints(p, p.selectedAction == ActionType.BUILD ? 1 : 2);
-    } else resolutionAction(g, p, ActionType.BUILD);
-    Resources cost = new Resources(1, 1, 0, 1, 0);
-    if (!building.outpostLegal(g, p, c.at()))
-      throw DomainException.of("INVALID_TARGET", "Outpost target is not legal");
-    p.resources = p.resources.subtract(cost);
+    } else {
+      requireResources(p, cost);
+      if (!building.outpostLegal(g, p, c.at()))
+        throw DomainException.of("INVALID_TARGET", "Outpost target is not legal");
+      resolutionAction(g, p, ActionType.BUILD);
+    }
+    spendResources(p, cost);
     p.settlements.add(new SettlementState(UUID.randomUUID(), c.at(), SettlementLevel.OUTPOST, 2));
     if (turn)
       e.add(new DomainEvent("OUTPOST_BUILT", Map.of("playerId", p.id, "at", c.at())));
@@ -429,10 +498,6 @@ public final class DefaultGameEngine implements GameEngine {
 
   private void recruit(GameState g, PlayerState p, GameCommand.Recruit c, List<DomainEvent> e) {
     boolean turn = g.phase == GamePhase.PLAYER_TURNS;
-    if (turn) {
-      requireCurrentTurn(g, p);
-      spendActionPoints(p, recruitActionPointCost(p, c.unitType()));
-    } else resolutionAction(g, p, ActionType.RECRUIT);
     Resources cost =
         switch (c.unitType()) {
           case MILITIA -> new Resources(0, 1, 0, 0, 0);
@@ -441,7 +506,15 @@ public final class DefaultGameEngine implements GameEngine {
           case CAVALRY -> new Resources(0, 2, 0, 0, 1);
           case MERCENARY -> new Resources(0, 0, 0, 0, 2);
         };
-    p.resources = p.resources.subtract(cost);
+    if (turn) {
+      requireCurrentTurn(g, p);
+      requireResources(p, cost);
+      spendActionPoints(p, recruitActionPointCost(p, c.unitType()));
+    } else {
+      requireResources(p, cost);
+      resolutionAction(g, p, ActionType.RECRUIT);
+    }
+    spendResources(p, cost);
     p.units.add(
         new UnitState(
             UUID.randomUUID(),
@@ -594,6 +667,12 @@ public final class DefaultGameEngine implements GameEngine {
     }
   }
 
+  private void requireResources(PlayerState p, Resources cost) {
+    if (!p.resources.covers(cost)) {
+      throw DomainException.of("INSUFFICIENT_RESOURCES", "Not enough resources");
+    }
+  }
+
   private void spendMana(PlayerState p, int amount) {
     if (p.hero == null || p.hero.mana() < amount)
       throw DomainException.of("INSUFFICIENT_MANA", "Not enough Mana");
@@ -722,6 +801,25 @@ public final class DefaultGameEngine implements GameEngine {
       p.resources = p.resources.add(ResourceType.GOLD, 1);
       p.reputation = Math.min(12, p.reputation + 1);
       publicReward = "+1 GOLD, +1 Reputation";
+    } else if (resultType == ExplorationResultType.HIDDEN_ROUTE) {
+      p.resources = p.resources.add(ResourceType.WOOD, 1).add(ResourceType.STONE, 1);
+      publicReward = "+1 WOOD, +1 STONE";
+    } else if (resultType == ExplorationResultType.LOCAL_QUEST) {
+      p.reputation = Math.min(12, p.reputation + 1);
+      publicReward = "+1 Reputation";
+    } else if (resultType == ExplorationResultType.MONSTER_CLUE) {
+      p.resources = p.resources.add(ResourceType.GOLD, 1);
+      publicReward = "+1 GOLD";
+    } else if (resultType == ExplorationResultType.AMBUSH) {
+      p.reputation = Math.min(12, p.reputation + 1);
+      publicReward = "+1 Reputation";
+    } else if (resultType == ExplorationResultType.VILLAGE_SECRET) {
+      p.resources = p.resources.add(ResourceType.GOLD, 1);
+      p.reputation = Math.min(12, p.reputation + 1);
+      publicReward = "+1 GOLD, +1 Reputation";
+    } else if (resultType == ExplorationResultType.TEMPORARY_BUFF) {
+      p.fortificationTokens += 1;
+      publicReward = "+1 Fortification";
     }
     if (target.terrain() == TerrainType.RUIN) p.exploredRuins.add(targetCoordinate);
     SealProgress old = p.sealProgress;
@@ -793,12 +891,12 @@ public final class DefaultGameEngine implements GameEngine {
       };
       case TRADE_CONTACT -> "A caravan contact paid for information" + reward;
       case ARTIFACT_CLUE -> "A private artifact clue was uncovered" + reward;
-      case HIDDEN_ROUTE -> "A hidden route was mapped. No immediate resource reward.";
-      case LOCAL_QUEST -> "A local request for assistance was discovered. No immediate resource reward.";
-      case MONSTER_CLUE -> "Private clues about nearby monsters were discovered. No immediate resource reward.";
-      case AMBUSH -> "An ambush was avoided. No immediate resource reward.";
-      case VILLAGE_SECRET -> "A private village secret was uncovered. No immediate resource reward.";
-      case TEMPORARY_BUFF -> "A temporary advantage was discovered. No immediate resource reward.";
+      case HIDDEN_ROUTE -> "A hidden route was mapped. You gained road-building supplies" + reward;
+      case LOCAL_QUEST -> "A local request was completed for reputation" + reward;
+      case MONSTER_CLUE -> "Monster tracks revealed a paid warning bounty" + reward;
+      case AMBUSH -> "An ambush was spotted and avoided; locals respect the warning" + reward;
+      case VILLAGE_SECRET -> "A village secret produced a useful lead" + reward;
+      case TEMPORARY_BUFF -> "A temporary defensive advantage was prepared" + reward;
       case NOTHING_FOUND -> "Nothing useful was found.";
     };
   }
@@ -1027,11 +1125,13 @@ public final class DefaultGameEngine implements GameEngine {
     PlayerState defender = player(g, conflict.defenderPlayerId());
     int roll = g.forcedD20 != null ? g.forcedD20 : die(g, 20);
     g.forcedD20 = null;
+    int defenderRoll = die(g, 20);
     int heroBonus = attacker.hero.heroClass() == HeroClass.KNIGHT ? 2 : 0;
     int attackerCardBonus = conflict.attackerActionCard() == ActionType.ATTACK ? 1 : 0;
     int defenderCardBonus = conflict.defenderActionCard() == ActionType.FORTIFY ? 1 : 0;
     int resourcesStolen = 0;
     int resourcesLost = 0;
+    String stolenResource = "NONE";
     int damage = 0;
     boolean success;
     String outcome;
@@ -1044,7 +1144,7 @@ public final class DefaultGameEngine implements GameEngine {
       int reactionDefense =
           reaction == ReactionType.SHIELD ? 4 : reaction == ReactionType.COUNTERATTACK ? 1 : 0;
       int attackTotal = roll + heroBonus + attackerCardBonus;
-      int defenseTotal = 10 + reactionDefense + defenderCardBonus;
+      int defenseTotal = defenderRoll + reactionDefense + defenderCardBonus;
       success = attackTotal >= defenseTotal;
       if (success) {
         if (reaction == ReactionType.EVACUATION) {
@@ -1057,6 +1157,7 @@ public final class DefaultGameEngine implements GameEngine {
           defender.resources = defender.resources.add(ResourceType.GOLD, -1);
           attacker.resources = attacker.resources.add(ResourceType.GOLD, 1);
           resourcesStolen = 1;
+          stolenResource = ResourceType.GOLD.name();
           outcome = "Raid succeeded and stole 1 Gold.";
         } else {
           outcome = "Raid succeeded, but no Gold was available to steal.";
@@ -1078,14 +1179,15 @@ public final class DefaultGameEngine implements GameEngine {
                   conflict.target(),
                   "SMALL_RAID",
                   roll,
+                  defenderRoll,
                   attackTotal,
                   defenseTotal,
                   0,
                   0,
                   0,
                   0));
-      e.add(conflictResolvedEvent(conflict, reaction, roll, attackTotal, defenseTotal, 0,
-          resourcesStolen, resourcesLost, outcome));
+      e.add(conflictResolvedEvent(conflict, reaction, roll, defenderRoll, attackTotal, defenseTotal, 0,
+          resourcesStolen, resourcesLost, stolenResource, outcome));
     } else {
       int armyBonus = army.calculateArmyBonus(army.armyPower(attackers, true, false));
       int defenseArmy =
@@ -1103,7 +1205,7 @@ public final class DefaultGameEngine implements GameEngine {
                       0,
                       defenseArmy,
                       defenderCardBonus,
-                      0,
+                      defenderRoll - 10,
                       reaction,
                       defender.fortificationTokens));
       damage = reaction == ReactionType.EVACUATION ? Math.max(0, result.damage() - 1) : result.damage();
@@ -1111,6 +1213,13 @@ public final class DefaultGameEngine implements GameEngine {
       if (reaction == ReactionType.EVACUATION && defender.resources.gold() > 0) {
         defender.resources = defender.resources.add(ResourceType.GOLD, -1);
         resourcesLost = 1;
+      }
+      if (damage > 0 && reaction != ReactionType.EVACUATION) {
+        ResourceType spoils = stealOneResource(defender, attacker);
+        if (spoils != null) {
+          resourcesStolen = 1;
+          stolenResource = spoils.name();
+        }
       }
       if (result.counterDamage()) woundFirstAttacker(attacker, attackers);
       attacker.units =
@@ -1122,6 +1231,7 @@ public final class DefaultGameEngine implements GameEngine {
           success
               ? "Full Attack dealt " + damage + " damage."
               : "Full Attack failed to deal damage.";
+      if (resourcesStolen > 0) outcome += " Spoils: stole 1 " + title(stolenResource) + ".";
       if (result.counterDamage()) outcome += " Counterattack wounded an attacking unit.";
       g.lastCombatReport =
           List.of(
@@ -1133,14 +1243,15 @@ public final class DefaultGameEngine implements GameEngine {
                   conflict.target(),
                   "FULL_ATTACK",
                   roll,
+                  defenderRoll,
                   result.attackTotal(),
                   result.defenseTotal(),
                   damage,
                   result.counterDamage() ? 1 : 0,
                   damage,
                   0));
-      e.add(conflictResolvedEvent(conflict, reaction, roll, result.attackTotal(), result.defenseTotal(),
-          damage, resourcesStolen, resourcesLost, outcome));
+      e.add(conflictResolvedEvent(conflict, reaction, roll, defenderRoll, result.attackTotal(), result.defenseTotal(),
+          damage, resourcesStolen, resourcesLost, stolenResource, outcome));
     }
     g.pendingConflict = null;
     g.phase = GamePhase.PLAYER_TURNS;
@@ -1151,11 +1262,13 @@ public final class DefaultGameEngine implements GameEngine {
       PendingConflict conflict,
       ReactionType reaction,
       int roll,
+      int defenderRoll,
       int attackTotal,
       int defenseTotal,
       int damage,
       int resourcesStolen,
       int resourcesLost,
+      String stolenResource,
       String outcome) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("attackerId", conflict.attackerPlayerId());
@@ -1164,11 +1277,13 @@ public final class DefaultGameEngine implements GameEngine {
     payload.put("attackType", conflict.attackType());
     payload.put("reaction", reaction);
     payload.put("roll", roll);
+    payload.put("defenderRoll", defenderRoll);
     payload.put("attackTotal", attackTotal);
     payload.put("defenseTotal", defenseTotal);
     payload.put("damage", damage);
     payload.put("resourcesStolen", resourcesStolen);
     payload.put("resourcesLost", resourcesLost);
+    payload.put("stolenResource", stolenResource);
     payload.put("attackerCard", conflict.attackerActionCard() == null ? "NONE" : conflict.attackerActionCard());
     payload.put("defenderCard", conflict.defenderActionCard() == null ? "NONE" : conflict.defenderActionCard());
     payload.put("outcome", outcome);
@@ -1188,15 +1303,26 @@ public final class DefaultGameEngine implements GameEngine {
     defender.settlements =
         defender.settlements.stream()
             .map(
-                settlement ->
-                    settlement.location().equals(target)
-                        ? new SettlementState(
-                            settlement.id(),
-                            settlement.location(),
-                            settlement.level(),
-                            Math.max(0, settlement.durability() - damage))
-                        : settlement)
+                settlement -> {
+                  if (!settlement.location().equals(target)) return settlement;
+                  int remaining = Math.max(0, settlement.durability() - damage);
+                  return new SettlementState(
+                      settlement.id(), settlement.location(), settlement.level(), remaining);
+                })
+            .filter(settlement -> settlement.durability() > 0)
             .toList();
+  }
+
+  private ResourceType stealOneResource(PlayerState defender, PlayerState attacker) {
+    for (ResourceType type :
+        List.of(ResourceType.GOLD, ResourceType.ORE, ResourceType.FOOD, ResourceType.WOOD, ResourceType.STONE)) {
+      if (resourceAmount(defender.resources, type) > 0) {
+        defender.resources = defender.resources.add(type, -1);
+        attacker.resources = attacker.resources.add(type, 1);
+        return type;
+      }
+    }
+    return null;
   }
 
   private void woundFirstAttacker(PlayerState attacker, List<UnitState> attackers) {
@@ -1278,6 +1404,7 @@ public final class DefaultGameEngine implements GameEngine {
         g.monsters.stream().filter(m -> m.location().equals(c.target())).findFirst().orElse(null);
     if (monster == null)
       throw DomainException.of("INVALID_TARGET", "Arcane Bolt needs a monster target for now");
+    boolean success = total >= 10;
     if (total >= 10) {
       int hp = monster.hp() - 1;
       g.monsters.remove(monster);
@@ -1285,9 +1412,26 @@ public final class DefaultGameEngine implements GameEngine {
         g.monsters.add(new MonsterState(monster.id(), monster.type(), monster.location(),
             monster.strength(), hp, monster.targetPlayerId(), monster.tier()));
     }
+    g.lastCombatReport =
+        List.of(
+            new CombatReportEntry(
+                p.id,
+                null,
+                monster.id(),
+                p.hero.location(),
+                c.target(),
+                "ARCANE_BOLT",
+                roll,
+                null,
+                total,
+                10,
+                success ? 1 : 0,
+                0,
+                0,
+                success ? 1 : 0));
     e.add(new DomainEvent("ARCANE_BOLT_RESOLVED",
         Map.of("playerId", p.id, "target", c.target(), "roll", roll, "total", total,
-            "success", total >= 10)));
+            "success", success)));
   }
 
   private void mageWard(GameState g, PlayerState p, GameCommand.MageWard c, List<DomainEvent> e) {
@@ -1323,7 +1467,10 @@ public final class DefaultGameEngine implements GameEngine {
     spendMana(p, 1);
     spendResources(p, Resources.none().add(c.give(), 1));
     p.resources = p.resources.add(c.receive(), 1);
-    e.add(event("MAGE_TRANSMUTE_USED", "playerId", p.id));
+    e.add(
+        new DomainEvent(
+            "MAGE_TRANSMUTE_USED",
+            Map.of("playerId", p.id, "give", c.give(), "receive", c.receive())));
   }
 
   private void scout(GameState g, PlayerState p, GameCommand.Scout c, List<DomainEvent> e) {
@@ -1558,6 +1705,7 @@ public final class DefaultGameEngine implements GameEngine {
               plan.target(),
               roll.type().name(),
               roll.roll(),
+              null,
               roll.total(),
               roll.opposingTotal(),
               roll.damage(),
@@ -1679,11 +1827,15 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void startPlayerTurn(GameState g, PlayerState p) {
-    p.basicActionPoints = 3;
+    p.basicActionPoints = baseActionPoints(g);
     resetTurnDiscounts(p);
     if (p.selectedAction == ActionType.FORTIFY) {
       p.fortificationTokens += p.hero.heroClass() == HeroClass.ENGINEER ? 3 : 2;
     }
+  }
+
+  private int baseActionPoints(GameState g) {
+    return g.gameMode == GameMode.BEGINNER ? 2 : 3;
   }
 
   private void resetTurnDiscounts(PlayerState p) {
@@ -1752,18 +1904,25 @@ public final class DefaultGameEngine implements GameEngine {
         return;
       }
     }
-    g.monsters.replaceAll(
-        m ->
-            new MonsterState(
-                m.id(),
-                m.type(),
-                m.location(),
-                Math.min(22, m.strength() + 1),
-                m.hp(),
-                m.targetPlayerId(),
-                m.tier()));
+    boolean strengthenMonsters = g.roundNumber % 2 == 0;
+    if (strengthenMonsters) {
+      g.monsters.replaceAll(
+          m ->
+              new MonsterState(
+                  m.id(),
+                  m.type(),
+                  m.location(),
+                  Math.min(22, m.strength() + 1),
+                  m.hp(),
+                  m.targetPlayerId(),
+                  m.tier()));
+    }
+    for (MonsterState monster : List.copyOf(g.monsters)) {
+      PlayerState target = player(g, monster.targetPlayerId());
+      monsterAttack(g, monster, target, e);
+    }
     for (PlayerState p : g.players) {
-      p.basicActionPoints = 3;
+      p.basicActionPoints = baseActionPoints(g);
       p.mainActionCompletedThisRound = false;
       p.selectedAction = null;
       p.actionLocked = false;
@@ -1885,6 +2044,12 @@ public final class DefaultGameEngine implements GameEngine {
     return switch (event.type()) {
       case "PRODUCTION_RESOLVED" -> productionMessage(g, p);
       case "MONSTER_SPAWNED" -> "🎲 Roll 7: no production. A monster appears in the realm.";
+      case "MONSTER_ATTACKED" ->
+          p.getOrDefault("monsterType", "Monster") + " attacked " + playerName(g, p.get("playerId"))
+              + " at " + coordText(p.get("target")) + ": d20 " + p.getOrDefault("roll", "?")
+              + ", attack " + p.getOrDefault("attackTotal", "?") + " vs defense "
+              + p.getOrDefault("defenseTotal", "?") + ", damage " + p.getOrDefault("damage", 0)
+              + ".";
       case "STARTING_OUTPOST_PLACED" ->
           playerName(g, p.get("playerId")) + " built a starting Outpost at " + coordText(p.get("at")) + ".";
       case "STARTING_ROAD_PLACED" ->
@@ -1928,7 +2093,10 @@ public final class DefaultGameEngine implements GameEngine {
       case "PRIEST_BLESS_USED" -> playerName(g, p.get("playerId")) + " used Bless.";
       case "PRIEST_SANCTUARY_USED" -> playerName(g, p.get("playerId")) + " used Sanctuary.";
       case "MAGE_WARD_USED" -> playerName(g, p.get("playerId")) + " placed a Ward.";
-      case "MAGE_TRANSMUTE_USED" -> playerName(g, p.get("playerId")) + " transmuted one resource.";
+      case "MAGE_TRANSMUTE_USED" ->
+          playerName(g, p.get("playerId")) + " transmuted "
+              + title(String.valueOf(p.getOrDefault("give", "one resource"))) + " into "
+              + title(String.valueOf(p.getOrDefault("receive", "another resource"))) + ".";
       case "CONFLICT_DECLARED" ->
           playerName(g, p.get("attackerId")) + " declared " + p.getOrDefault("attackType", "an attack")
               + " against " + playerName(g, p.get("defenderId")) + " at " + coordText(p.get("target"))
@@ -1937,11 +2105,15 @@ public final class DefaultGameEngine implements GameEngine {
           playerName(g, p.get("attackerId")) + " vs " + playerName(g, p.get("defenderId"))
               + " — " + p.getOrDefault("attackType", "conflict")
               + ", reaction: " + p.getOrDefault("reaction", "NONE")
-              + ", roll " + p.getOrDefault("roll", "?")
+              + ", attacker d20 " + p.getOrDefault("roll", "?")
+              + ", defender d20 " + p.getOrDefault("defenderRoll", "?")
               + ", attack " + p.getOrDefault("attackTotal", "?")
               + " vs defense " + p.getOrDefault("defenseTotal", "?")
               + ", damage " + p.getOrDefault("damage", 0)
               + ", stolen " + p.getOrDefault("resourcesStolen", 0)
+              + ("NONE".equals(String.valueOf(p.getOrDefault("stolenResource", "NONE")))
+                  ? ""
+                  : " " + title(String.valueOf(p.get("stolenResource"))))
               + ", lost " + p.getOrDefault("resourcesLost", 0)
               + ". Cards revealed: attacker " + p.getOrDefault("attackerCard", "NONE")
               + ", defender " + p.getOrDefault("defenderCard", "NONE")
@@ -1965,11 +2137,16 @@ public final class DefaultGameEngine implements GameEngine {
       return "🎲 Roll " + roll + ": no settlements produced resources.";
     }
     Map<String, Map<String, Integer>> byPlayer = new LinkedHashMap<>();
+    Map<String, Set<Integer>> sourceNumbers = new LinkedHashMap<>();
     for (Object entry : entries) {
       if (entry instanceof ProductionResolver.Production item) {
+        String name = playerName(g, item.playerId());
         byPlayer
-            .computeIfAbsent(playerName(g, item.playerId()), ignored -> new LinkedHashMap<>())
+            .computeIfAbsent(name, ignored -> new LinkedHashMap<>())
             .merge(item.resource().name(), item.amount(), Integer::sum);
+        if (item.productionNumber() != 0) {
+          sourceNumbers.computeIfAbsent(name, ignored -> new LinkedHashSet<>()).add(item.productionNumber());
+        }
       }
     }
     if (byPlayer.isEmpty()) return "🎲 Roll " + roll + ": production resolved.";
@@ -1980,10 +2157,21 @@ public final class DefaultGameEngine implements GameEngine {
                     + entry.getValue().entrySet().stream()
                         .map(resource -> resource.getValue() + " " + title(resource.getKey()))
                         .reduce((a, b) -> a + ", " + b)
-                        .orElse("nothing"))
+                        .orElse("nothing")
+                    + productionSourceNote(roll, sourceNumbers.get(entry.getKey())))
             .reduce((a, b) -> a + "; " + b)
             .orElse("production resolved");
     return "🎲 Roll " + roll + ": " + gains + ".";
+  }
+
+  private String productionSourceNote(Object roll, Set<Integer> numbers) {
+    if (numbers == null || numbers.isEmpty()) return "";
+    Set<String> labels =
+        numbers.stream()
+            .map(String::valueOf)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    if (labels.size() == 1 && labels.contains(String.valueOf(roll))) return "";
+    return " from number " + String.join("/", labels) + " via Beginner mode";
   }
 
   private String playerName(GameState g, Object id) {

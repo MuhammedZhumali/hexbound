@@ -13,6 +13,7 @@ const game = {
   name: 'test',
   seed: 1,
   debugMode: false,
+  gameMode: 'STANDARD',
   status: 'ACTIVE',
   phase: 'WORLD',
   roundNumber: 1,

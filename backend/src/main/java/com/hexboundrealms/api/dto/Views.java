@@ -30,6 +30,7 @@ public final class Views {
       String name,
       long seed,
       boolean debugMode,
+      GameMode gameMode,
       GameStatus status,
       GamePhase phase,
       int roundNumber,

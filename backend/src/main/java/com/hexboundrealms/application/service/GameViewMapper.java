@@ -67,6 +67,7 @@ public final class GameViewMapper {
         g.name,
         g.seed,
         g.debugMode,
+        g.gameMode,
         g.status,
         g.phase,
         g.roundNumber,

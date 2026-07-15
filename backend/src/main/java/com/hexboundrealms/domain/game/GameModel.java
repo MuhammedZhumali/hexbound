@@ -12,6 +12,11 @@ public final class GameModel {
     FINISHED
   }
 
+  public enum GameMode {
+    STANDARD,
+    BEGINNER
+  }
+
   public enum GamePhase {
     SETUP,
     HERO_SELECTION,
@@ -254,6 +259,7 @@ public final class GameModel {
       HexCoordinate target,
       String conflictType,
       int roll,
+      Integer defenseRoll,
       int attackTotal,
       int defenseTotal,
       int damage,
@@ -374,6 +380,7 @@ public final class GameModel {
     public long seed;
     public int maxPlayers;
     public boolean debugMode;
+    public GameMode gameMode = GameMode.STANDARD;
     public GameStatus status = GameStatus.LOBBY;
     public GamePhase phase = GamePhase.SETUP;
     public int roundNumber = 0;

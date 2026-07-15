@@ -1,34 +1,22 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/client';
-import type { Seat } from '../../types/game';
-
-const players = [
-  { displayName: 'Игрок 1', playerColor: 'BLUE' },
-  { displayName: 'Игрок 2', playerColor: 'RED' },
-  { displayName: 'Игрок 3', playerColor: 'GREEN' },
-  { displayName: 'Игрок 4', playerColor: 'GOLD' },
-];
 
 export function SetupPage() {
   const navigate = useNavigate();
-  const [name, setName] = useState('Долина четырёх корон');
+  const [name, setName] = useState('Hexbound Realms Lobby');
   const [seed, setSeed] = useState(123456);
   const [debug, setDebug] = useState(true);
+  const [gameMode, setGameMode] = useState<'BEGINNER' | 'STANDARD'>('BEGINNER');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  async function create() {
+  async function createLobby() {
     setBusy(true);
     setError('');
     try {
-      const game = await api.create({ name, seed, maxPlayers: 4, debugMode: debug });
-      const seats: Seat[] = [];
-      for (const player of players) {
-        seats.push(await api.join(game.id, player));
-      }
-      localStorage.setItem(`seats:${game.id}`, JSON.stringify(seats));
-      await api.start(game.id);
+      const game = await api.create({ name, seed, maxPlayers: 4, debugMode: debug, gameMode });
+      localStorage.setItem(`host:${game.id}`, 'true');
       navigate(`/games/${game.id}`);
     } catch (cause) {
       setError((cause as Error).message);
@@ -40,22 +28,22 @@ export function SetupPage() {
   return (
     <main className="setup">
       <section className="setup-card">
-        <p className="eyebrow">Фэнтезийная стратегия для четырёх игроков</p>
+        <p className="eyebrow">Lobby-based local multiplayer</p>
         <h1>
           Hexbound <i>Realms</i>
         </h1>
         <p className="setup-lead">
-          Развивайте владения, договаривайтесь с деревнями и сражайтесь с чудовищами. Все результаты
-          рассчитывает сервер.
+          Create a lobby, open the same game URL in up to four browser tabs, then each player joins
+          with their own color and private profile.
         </p>
 
         <div className="setup-fields">
           <label>
-            Название мира
+            Lobby name
             <input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <label>
-            Seed карты
+            Map seed
             <input
               type="number"
               value={seed}
@@ -64,14 +52,23 @@ export function SetupPage() {
           </label>
         </div>
 
-        <div className="setup-players">
-          {players.map((player) => (
-            <span key={player.displayName}>
-              <i className={`player-dot ${player.playerColor.toLowerCase()}`} />
-              {player.displayName}
-              <small>герой выбирается в драфте</small>
-            </span>
-          ))}
+        <div className="mode-picker" role="radiogroup" aria-label="Game mode">
+          <button
+            type="button"
+            className={gameMode === 'BEGINNER' ? 'active' : ''}
+            onClick={() => setGameMode('BEGINNER')}
+          >
+            <b>Beginner / Fast</b>
+            <span>2 AP turns. Production triggers on rolled number and adjacent numbers.</span>
+          </button>
+          <button
+            type="button"
+            className={gameMode === 'STANDARD' ? 'active' : ''}
+            onClick={() => setGameMode('STANDARD')}
+          >
+            <b>Standard</b>
+            <span>3 AP turns. Normal production pace.</span>
+          </button>
         </div>
 
         <label className="check">
@@ -80,18 +77,18 @@ export function SetupPage() {
             checked={debug}
             onChange={(event) => setDebug(event.target.checked)}
           />
-          Разрешить отладочные броски
+          Allow debug dice controls
         </label>
 
         {error && <p className="error">{error}</p>}
-        <button className="primary large-button" disabled={busy} onClick={create}>
-          {busy ? 'Создаём мир…' : 'Начать игру на 4 человека'}
+        <button className="primary large-button" disabled={busy} onClick={createLobby}>
+          {busy ? 'Creating lobby…' : 'Create lobby'}
         </button>
       </section>
       <div className="setup-mark" aria-hidden="true">
-        <b>37</b>
-        <span>земель</span>
-        <small>одна долина · четыре героя</small>
+        <b>4</b>
+        <span>players</span>
+        <small>one lobby · one private tab per player</small>
       </div>
     </main>
   );

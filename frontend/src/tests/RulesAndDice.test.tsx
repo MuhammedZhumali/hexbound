@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { Board } from '../components/board/Board';
 import { RulesModal } from '../components/dialogs/RulesModal';
 import { RealmPanel } from '../components/panels/Panels';
 import type { Game } from '../types/game';
@@ -9,6 +10,7 @@ const game = {
   name: 'Four Crowns',
   seed: 42,
   debugMode: false,
+  gameMode: 'STANDARD',
   status: 'ACTIVE',
   phase: 'WORLD',
   roundNumber: 1,
@@ -48,10 +50,15 @@ describe('rules and dice assistance', () => {
     expect(screen.getByText('Action Card')).toBeInTheDocument();
   });
 
-  it('shows animated dice area and phase guidance below the player roster', () => {
-    const { container } = render(<RealmPanel game={game} rolling guidanceLevel="BEGINNER" />);
-    expect(screen.getByText(/Кубики летят|ÐšÑƒÐ±Ð¸ÐºÐ¸/)).toBeInTheDocument();
+  it('shows animated dice on the board and phase guidance below the player roster', () => {
+    const { container } = render(
+      <>
+        <RealmPanel game={game} guidanceLevel="BEGINNER" />
+        <Board game={game} rolling />
+      </>,
+    );
     expect(screen.getByLabelText('Phase guide')).toBeInTheDocument();
-    expect(container.querySelector('.dice-tray.rolling')).toBeInTheDocument();
+    expect(container.querySelector('.board-dice-overlay')).toBeInTheDocument();
+    expect(container.querySelector('.d6-ui.rolling')).toBeInTheDocument();
   });
 });

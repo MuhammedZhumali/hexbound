@@ -7,6 +7,7 @@ import {
   phaseLabel,
   type GuidanceLevel,
 } from '../guidance/Guidance';
+import { heroCardArt, resourceArt } from '../../assets/gameAssets';
 
 const heroNames: Record<string, string> = {
   KNIGHT: 'Рыцарь',
@@ -31,7 +32,7 @@ const phaseNames: Record<string, string> = {
   MARKET: 'Рынок',
   ACTION_CARD_SELECTION: 'Action Card Selection',
   ACTION_CARD_REVEAL: 'Action Card Reveal',
-  PLAYER_TURNS: '3 AP Player Turns',
+  PLAYER_TURNS: 'Player Turns',
   PLANNING: 'Тайное планирование',
   REVEAL: 'Раскрытие действий',
   RESOLUTION: 'Разыгрывание действий',
@@ -42,13 +43,11 @@ const phaseNames: Record<string, string> = {
 
 export function RealmPanel({
   game,
-  rolling,
   guidanceLevel,
   view,
   invalidSelectionReason,
 }: {
   game: Game;
-  rolling: boolean;
   guidanceLevel: GuidanceLevel;
   view?: PrivateView;
   invalidSelectionReason?: string;
@@ -97,8 +96,6 @@ export function RealmPanel({
         ))}
       </div>
 
-      <DiceRoll value={game.lastRoll} rolling={rolling} />
-
       <h3>Журнал партии</h3>
       <EventLog events={game.eventLog} />
     </aside>
@@ -146,33 +143,6 @@ function EventLog({ events }: { events: string[] }) {
   );
 }
 
-function DiceRoll({ value, rolling }: { value?: number; rolling: boolean }) {
-  const first = value ? Math.max(1, value - 6) : 1;
-  const second = value ? value - first : 1;
-  return (
-    <section className={`dice-tray ${rolling ? 'rolling' : ''}`} aria-live="polite">
-      <div className="dice-copy">
-        <small>Бросок мира</small>
-        <b>{rolling ? 'Кубики летят…' : value ? `Результат: ${value}` : 'Ещё не бросали'}</b>
-      </div>
-      <div className="dice-pair" aria-label={value ? `Выпало ${value}` : 'Кубики не брошены'}>
-        <Die value={first} />
-        <Die value={second} />
-      </div>
-    </section>
-  );
-}
-
-function Die({ value }: { value: number }) {
-  return (
-    <div className={`die face-${value}`}>
-      {Array.from({ length: value }, (_, index) => (
-        <i key={index} />
-      ))}
-    </div>
-  );
-}
-
 export function PlayerPanel({ view }: { view?: PrivateView }) {
   if (!view) {
     return (
@@ -206,6 +176,9 @@ export function PlayerPanel({ view }: { view?: PrivateView }) {
       </h2>
       <section className="hero-summary-card">
         <p className="eyebrow">Hero</p>
+        {heroCardArt[hero.heroClass] && (
+          <img className="hero-summary-art" src={heroCardArt[hero.heroClass]} alt="" />
+        )}
         <b>{heroNames[hero.heroClass] ?? hero.heroClass}</b>
         <span>
           Location: {hero.location ? `${hero.location.q}, ${hero.location.r}` : 'not placed yet'}
@@ -224,7 +197,7 @@ export function PlayerPanel({ view }: { view?: PrivateView }) {
           const needed = actionCost(view.selectedAction)?.[name as keyof PrivateView['resources']];
           return (
             <span className={needed ? 'needed-resource' : ''} key={name}>
-              <i>{resourceIcon(name)}</i>
+              <i>{resourceArt[name] ? <img src={resourceArt[name]} alt="" /> : resourceIcon(name)}</i>
               <b>{amount}</b>
               <small>{resourceName(name)}</small>
               {needed ? (

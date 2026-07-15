@@ -12,7 +12,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 export const api = {
-  create: (body: { name: string; seed: number; maxPlayers: number; debugMode: boolean }) =>
+  create: (body: {
+    name: string;
+    seed: number;
+    maxPlayers: number;
+    debugMode: boolean;
+    gameMode: 'STANDARD' | 'BEGINNER';
+  }) =>
     request<Game>('/api/v1/games', { method: 'POST', body: JSON.stringify(body) }),
   get: (id: string) => request<Game>(`/api/v1/games/${id}`),
   join: async (id: string, body: { displayName: string; playerColor: string }): Promise<Seat> => ({
@@ -21,6 +27,17 @@ export const api = {
       { method: 'POST', body: JSON.stringify(body) },
     )),
     displayName: body.displayName,
+  }),
+  guestLogin: async (
+    id: string,
+    body: { playerColor: string },
+    displayName: string,
+  ): Promise<Seat> => ({
+    ...(await request<{ playerId: string; accessToken: string; version: number }>(
+      `/api/v1/games/${id}/guest-login`,
+      { method: 'POST', body: JSON.stringify(body) },
+    )),
+    displayName,
   }),
   start: (id: string) => request<Game>(`/api/v1/games/${id}/start`, { method: 'POST' }),
   heroDraft: (id: string) => request<HeroDraft>(`/api/v1/games/${id}/hero-draft`),

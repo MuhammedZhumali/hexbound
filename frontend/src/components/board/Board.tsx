@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import type { Game, Hex } from '../../types/game';
 import { useUi } from '../../store/ui';
+import { heroTokenArt, monsterArt } from '../../assets/gameAssets';
 
 const RADIUS = 48;
 const HEIGHT = Math.sqrt(3) * RADIUS;
@@ -65,11 +66,13 @@ export function Board({
   legal = [],
   overlayType,
   explainInvalid,
+  rolling = false,
 }: {
   game: Game;
   legal?: string[];
   overlayType?: string;
   explainInvalid?: (hex: Hex) => void;
+  rolling?: boolean;
 }) {
   const { selected, select, zoom, pan, setZoom, setPan } = useUi();
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | undefined>(undefined);
@@ -149,17 +152,23 @@ export function Board({
               const from = center(road.from.q, road.from.r);
               const to = center(road.to.q, road.to.r);
               return (
-                <line
-                  key={road.id}
-                  x1={from.x}
-                  y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
-                  stroke={player.color.toLowerCase()}
-                  strokeWidth="9"
-                  strokeLinecap="round"
-                  className="road"
-                />
+                <g key={road.id} className="road-segment">
+                  <line
+                    x1={from.x}
+                    y1={from.y}
+                    x2={to.x}
+                    y2={to.y}
+                    className="road-outline"
+                  />
+                  <line
+                    x1={from.x}
+                    y1={from.y}
+                    x2={to.x}
+                    y2={to.y}
+                    stroke={player.color.toLowerCase()}
+                    className="road"
+                  />
+                </g>
               );
             }),
           )}
@@ -195,6 +204,13 @@ export function Board({
                     strokeWidth="2"
                   />
                   <text y="23">{settlement.level[0]}</text>
+                  <text className="settlement-durability" y="4">
+                    {settlement.durability}/{settlementMaxDurability(settlement.level)}
+                  </text>
+                  <title>
+                    {player.displayName} {settlement.level}: durability {settlement.durability}/
+                    {settlementMaxDurability(settlement.level)}
+                  </title>
                 </g>
               );
             }),
@@ -211,8 +227,20 @@ export function Board({
                   className="hero-token"
                   transform={`translate(${position.x + 18} ${position.y - 18})`}
                 >
-                  <circle r="15" fill={player.color.toLowerCase()} />
-                  <text y="5">{heroIcon(player.hero?.heroClass ?? player.heroClass)}</text>
+                  <circle r="16" fill={player.color.toLowerCase()} />
+                  {heroTokenArt[player.hero?.heroClass ?? player.heroClass ?? ''] ? (
+                    <image
+                      href={heroTokenArt[player.hero?.heroClass ?? player.heroClass ?? '']}
+                      x="-13"
+                      y="-13"
+                      width="26"
+                      height="26"
+                      preserveAspectRatio="xMidYMid slice"
+                    />
+                  ) : (
+                    <text y="5">{heroIcon(player.hero?.heroClass ?? player.heroClass)}</text>
+                  )}
+                  <circle r="16" fill="none" stroke={player.color.toLowerCase()} strokeWidth="4" />
                   <title>
                     {player.displayName} Hero: {player.hero?.heroClass ?? player.heroClass ?? 'Hero'} (
                     {location.q}, {location.r})
@@ -224,8 +252,17 @@ export function Board({
           {game.monsters.map((monster) => {
             const position = center(monster.location.q, monster.location.r);
             return (
-              <g key={monster.id} transform={`translate(${position.x} ${position.y})`}>
-                <circle r="20" fill="#55303a" stroke="#ff8791" strokeWidth="3" />
+              <g key={monster.id} className="monster-token" transform={`translate(${position.x} ${position.y})`}>
+                <circle r="22" fill="#55303a" stroke="#ff8791" strokeWidth="3" />
+                <image
+                  href={monsterArt(monster.type)}
+                  x="-18"
+                  y="-18"
+                  width="36"
+                  height="36"
+                  preserveAspectRatio="xMidYMid slice"
+                />
+                <circle r="22" fill="none" stroke="#ff8791" strokeWidth="3" />
                 <text y="5" fontSize="21">
                   ♞
                 </text>
@@ -257,8 +294,77 @@ export function Board({
           {tooltip.villageLoyalty != null && <span>Лояльность: {tooltip.villageLoyalty}</span>}
         </div>
       )}
+
+      <BoardDiceOverlay game={game} rolling={rolling} />
     </div>
   );
+}
+
+function BoardDiceOverlay({ game, rolling }: { game: Game; rolling: boolean }) {
+  const latestCombat = game.combatReport?.at(-1);
+  const preferWorldRoll =
+    rolling ||
+    game.phase === 'WORLD_ROLL' ||
+    game.phase === 'PRODUCTION' ||
+    (game.phase === 'MONSTER_EVENT' && latestCombat?.conflictType !== 'MONSTER_ATTACK');
+  const showCombat =
+    latestCombat &&
+    !preferWorldRoll &&
+    ['FULL_ATTACK', 'SMALL_RAID', 'ARCANE_BOLT', 'MONSTER_ATTACK', 'ONE_WAY_ASSAULT', 'RECIPROCAL_CLASH', 'HERO_DUEL'].includes(
+      latestCombat.conflictType,
+    );
+  if (showCombat) {
+    return (
+      <aside className="board-dice-overlay" aria-live="polite">
+        <small>{latestCombat.conflictType === 'MONSTER_ATTACK' ? 'Monster attack' : 'Combat roll'}</small>
+        <div className="d20-row">
+          <D20Die value={latestCombat.roll} rolling={rolling} label="ATK" />
+          {latestCombat.defenseRoll && <D20Die value={latestCombat.defenseRoll} rolling={rolling} label="DEF" />}
+        </div>
+        <b>
+          {latestCombat.attackTotal} vs {latestCombat.defenseTotal}
+        </b>
+      </aside>
+    );
+  }
+  if (!game.lastRoll && !rolling) return null;
+  const first = game.lastRoll ? Math.max(1, Math.min(6, game.lastRoll - 6)) : 1;
+  const second = game.lastRoll ? Math.max(1, Math.min(6, game.lastRoll - first)) : 1;
+  return (
+    <aside className="board-dice-overlay" aria-live="polite">
+      <small>World roll</small>
+      <div className="d6-row">
+        <D6Die value={first} rolling={rolling} />
+        <D6Die value={second} rolling={rolling} />
+      </div>
+      <b>{rolling ? 'Rolling…' : `Total ${game.lastRoll}`}</b>
+    </aside>
+  );
+}
+
+function D20Die({ value, rolling, label }: { value: number; rolling: boolean; label?: string }) {
+  const critical = value === 20;
+  const fumble = value === 1;
+  return (
+    <div className={`d20-ui ${rolling ? 'rolling' : ''} ${critical ? 'critical' : ''} ${fumble ? 'fumble' : ''}`}>
+      {label && <em>{label}</em>}
+      <span>{value}</span>
+    </div>
+  );
+}
+
+function D6Die({ value, rolling }: { value: number; rolling: boolean }) {
+  return (
+    <div className={`d6-ui face-${value} ${rolling ? 'rolling' : ''}`}>
+      {Array.from({ length: value }, (_, index) => (
+        <i key={index} />
+      ))}
+    </div>
+  );
+}
+
+function settlementMaxDurability(level: string) {
+  return level === 'CITY' ? 4 : 2;
 }
 
 function HexTile({

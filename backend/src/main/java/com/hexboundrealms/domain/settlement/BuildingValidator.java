@@ -26,6 +26,10 @@ public final class BuildingValidator {
     if (game.players.stream()
         .flatMap(x -> x.settlements.stream())
         .anyMatch(s -> s.location().equals(at))) return false;
+    if (game.players.stream()
+        .filter(x -> !x.id.equals(p.id))
+        .flatMap(x -> x.settlements.stream())
+        .anyMatch(s -> s.location().distanceTo(at) <= 1)) return false;
     if (game.monsters.stream().anyMatch(m -> m.location().equals(at))) return false;
     if (game.map.stream()
         .noneMatch(

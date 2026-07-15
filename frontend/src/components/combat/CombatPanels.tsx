@@ -1,4 +1,5 @@
 import type { Game, PrivateView } from '../../types/game';
+import { monsterArt } from '../../assets/gameAssets';
 
 export function CombatPreview({
   game,
@@ -56,6 +57,7 @@ export function MonsterEventModal({
   const target = game.players.find((player) => player.id === monster.targetPlayerId);
   return (
     <div className="monster-callout" role="status" aria-label="Monster event">
+      <img className="monster-callout-art" src={monsterArt(monster.type)} alt="" />
       <div>
         <p className="eyebrow">Monster Event</p>
         <h3>A Monster Appears</h3>

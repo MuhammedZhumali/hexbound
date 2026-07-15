@@ -35,6 +35,11 @@ public class GameController {
     return games.join(id, request);
   }
 
+  @PostMapping("/games/{id}/guest-login")
+  public JoinResult guestLogin(@PathVariable UUID id, @Valid @RequestBody GuestLogin request) {
+    return games.guestLogin(id, request);
+  }
+
   @GetMapping("/games/{id}/players/{playerId}")
   public PrivatePlayerView privateView(
       @PathVariable UUID id,

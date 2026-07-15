@@ -21,7 +21,7 @@ const phaseNames: Record<string, string> = {
   MARKET: 'Market',
   ACTION_CARD_SELECTION: 'Action Card Selection',
   ACTION_CARD_REVEAL: 'Action Card Reveal',
-  PLAYER_TURNS: '3 AP Player Turns',
+  PLAYER_TURNS: 'Player Turns',
   PLANNING: 'Action Card Selection',
   REVEAL: 'Action Card Reveal',
   RESOLUTION: 'Combat and Actions',
@@ -100,7 +100,7 @@ const phaseHelp: Record<string, { objective: string; beginner: string[]; normal:
     normal: ['Create, accept, reject, or cancel pending offers.'],
   },
   PLAYER_TURNS: {
-    objective: 'Spend up to 3 Action Points. Your revealed card gives a bonus, not a separate turn.',
+    objective: 'Spend your Action Points. Your revealed card gives a bonus, not a separate turn.',
     beginner: [
       'You can move, explore, build, recruit, trade with the bank, or attack if the card allows it.',
       'If you are unsure, build roads, trade for missing resources, or explore nearby terrain.',
@@ -180,12 +180,16 @@ export function PhaseGuide({
       : guidanceLevel === 'NORMAL'
         ? guide.normal
         : guide.beginner;
+  const objective =
+    game.phase === 'PLAYER_TURNS'
+      ? `Spend up to ${game.gameMode === 'BEGINNER' ? 2 : 3} Action Points. Your revealed card gives a bonus, not a separate turn.`
+      : guide.objective;
 
   return (
     <section className="guide-card" aria-label="Phase guide">
       <p className="eyebrow">Phase Guide</p>
       <h3>{phaseLabel(game.phase)}</h3>
-      <p>{guide.objective}</p>
+      <p>{objective}</p>
       {details.length > 0 && (
         <ul>
           {details.map((item) => (
@@ -293,10 +297,11 @@ function checklistFor(game: Game, view?: PrivateView): ChecklistItem[] {
     ];
   }
   if (game.phase === 'PLAYER_TURNS') {
+    const maxAp = game.gameMode === 'BEGINNER' ? 2 : 3;
     return [
       { label: 'Optional: trade with players', state: 'done' },
       {
-        label: 'Spend up to 3 AP',
+        label: `Spend up to ${maxAp} AP`,
         state: view?.basicActionPoints === 0 ? 'done' : 'current',
       },
       { label: 'Use your card bonus if useful', state: view?.selectedAction ? 'current' : 'todo' },

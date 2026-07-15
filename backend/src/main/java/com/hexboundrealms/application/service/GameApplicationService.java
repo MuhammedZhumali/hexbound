@@ -47,6 +47,7 @@ public class GameApplicationService {
     g.seed = request.seed() == null ? new Random().nextLong() : request.seed();
     g.maxPlayers = request.maxPlayers();
     g.debugMode = request.debugMode();
+    g.gameMode = request.gameMode() == null ? GameMode.STANDARD : request.gameMode();
     g.map = new ArrayList<>(new MapGenerator().generate(g.seed));
     g.deck = new ArrayList<>(cards.all());
     Collections.shuffle(g.deck, new Random(g.seed ^ 0xCAFE));
@@ -80,6 +81,18 @@ public class GameApplicationService {
   }
 
   @Transactional(readOnly = true)
+  public JoinResult guestLogin(UUID gameId, GuestLogin request) {
+    GameEntity entity = entity(gameId);
+    GameState g = read(entity);
+    PlayerState p =
+        g.players.stream()
+            .filter(player -> player.color == request.playerColor())
+            .findFirst()
+            .orElseThrow(() -> DomainException.of("PLAYER_NOT_FOUND", "No player has this color"));
+    return new JoinResult(p.id, p.accessToken, entity.getVersion());
+  }
+
+  @Transactional(readOnly = true)
   public PublicGameView get(UUID id) {
     GameEntity e = entity(id);
     GameState g = read(e);
@@ -106,6 +119,10 @@ public class GameApplicationService {
   public PublicGameView start(UUID id) {
     GameEntity e = entity(id);
     GameState g = read(e);
+    g.version = e.getVersion();
+    if (g.phase != GamePhase.SETUP) {
+      return views.publicView(g);
+    }
     if (g.players.isEmpty()) throw DomainException.of("INVALID_PLAYER_COUNT", "Join players first");
     CommandResult result = engine.execute(g, g.players.getFirst().id, new GameCommand.Start());
     return persist(e, g, UUID.randomUUID(), result);
@@ -250,12 +267,15 @@ public class GameApplicationService {
     result.add(action("DEEP_EXPLORE", "Deep Explore", "Spend more time for better exploration odds.", deepCost,
         Resources.none(), p.basicActionPoints >= deepCost && !exploreTargets.isEmpty(),
         apOrTargetReason(p, deepCost, exploreTargets), true, TargetType.HEX, exploreTargets));
+    Resources roadCost = new Resources(1, 0, 0, 1, 0);
     result.add(action("BUILD_ROAD", "Build Road", "Build a road from your network.", 1,
-        new Resources(1, 0, 0, 1, 0), p.basicActionPoints >= 1 && !roadTargets.isEmpty(),
-        apOrTargetReason(p, 1, roadTargets), true, TargetType.HEX, roadTargets));
-    result.add(action("BUILD_OUTPOST", "Build Outpost", "Found an outpost on a legal hex.", p.selectedAction == ActionType.BUILD ? 1 : 2,
-        new Resources(1, 0, 0, 1, 0), p.basicActionPoints >= (p.selectedAction == ActionType.BUILD ? 1 : 2) && !buildTargets.isEmpty(),
-        apOrTargetReason(p, p.selectedAction == ActionType.BUILD ? 1 : 2, buildTargets), true, TargetType.FRIENDLY_HEX, buildTargets));
+        roadCost, p.basicActionPoints >= 1 && !roadTargets.isEmpty() && p.resources.covers(roadCost),
+        apResourceOrTargetReason(p, 1, roadCost, roadTargets), true, TargetType.HEX, roadTargets));
+    Resources outpostCost = new Resources(1, 1, 0, 1, 0);
+    int outpostApCost = p.selectedAction == ActionType.BUILD ? 1 : 2;
+    result.add(action("BUILD_OUTPOST", "Build Outpost", "Found an outpost on a legal hex.", outpostApCost,
+        outpostCost, p.basicActionPoints >= outpostApCost && !buildTargets.isEmpty() && p.resources.covers(outpostCost),
+        apResourceOrTargetReason(p, outpostApCost, outpostCost, buildTargets), true, TargetType.FRIENDLY_HEX, buildTargets));
     int recruitCost = p.selectedAction == ActionType.RECRUIT && !p.freeMilitiaUsed ? 0 : 1;
     result.add(action("RECRUIT", "Recruit Militia", "Add one Militia.", recruitCost,
         new Resources(0, 1, 0, 0, 0), p.basicActionPoints >= recruitCost && p.resources.food() >= 1,
@@ -354,9 +374,10 @@ public class GameApplicationService {
             true, TargetType.HEX, movementTargets));
       }
       case ENGINEER -> {
+        Resources quickRoadCost = new Resources(1, 0, 0, 1, 0);
         result.add(action("QUICK_ROAD", "Quick Road", "Build one road for 0 AP once per turn.", 0,
-            new Resources(1, 0, 0, 1, 0), !p.quickRoadUsed && !roadTargets.isEmpty(),
-            p.quickRoadUsed ? "Quick Road already used." : apOrTargetReason(p, 0, roadTargets),
+            quickRoadCost, !p.quickRoadUsed && !roadTargets.isEmpty() && p.resources.covers(quickRoadCost),
+            p.quickRoadUsed ? "Quick Road already used." : apResourceOrTargetReason(p, 0, quickRoadCost, roadTargets),
             true, TargetType.HEX, roadTargets));
         result.add(action("REPAIR", "Repair", "Repair 1 damage once per turn.", 0,
             Resources.none(), !p.repairUsed, p.repairUsed ? "Repair already used." : null,
@@ -455,6 +476,24 @@ public class GameApplicationService {
     if (p.basicActionPoints < cost) return "You only have " + p.basicActionPoints + " AP remaining.";
     if (targets.isEmpty()) return "No valid target.";
     return null;
+  }
+
+  private String apResourceOrTargetReason(
+      PlayerState p, int cost, Resources resourceCost, List<String> targets) {
+    String apOrTarget = apOrTargetReason(p, cost, targets);
+    if (apOrTarget != null) return apOrTarget;
+    if (!p.resources.covers(resourceCost)) return "Missing: " + missingResources(p.resources, resourceCost) + ".";
+    return null;
+  }
+
+  private String missingResources(Resources available, Resources cost) {
+    List<String> missing = new ArrayList<>();
+    if (available.wood() < cost.wood()) missing.add((cost.wood() - available.wood()) + " Wood");
+    if (available.food() < cost.food()) missing.add((cost.food() - available.food()) + " Food");
+    if (available.ore() < cost.ore()) missing.add((cost.ore() - available.ore()) + " Ore");
+    if (available.stone() < cost.stone()) missing.add((cost.stone() - available.stone()) + " Stone");
+    if (available.gold() < cost.gold()) missing.add((cost.gold() - available.gold()) + " Gold");
+    return String.join(", ", missing);
   }
 
   private List<String> exploreTargets(GameState g, PlayerState p) {

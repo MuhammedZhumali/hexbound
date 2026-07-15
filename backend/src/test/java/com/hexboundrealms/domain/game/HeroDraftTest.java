@@ -19,6 +19,7 @@ class HeroDraftTest {
     assertThat(game.order.heroDraftOrder())
         .containsExactlyElementsOf(game.order.initialTurnOrder().reversed());
     assertThat(game.phase).isEqualTo(GamePhase.HERO_SELECTION);
+    assertThat(game.status).isEqualTo(GameStatus.ACTIVE);
   }
 
   @Test
