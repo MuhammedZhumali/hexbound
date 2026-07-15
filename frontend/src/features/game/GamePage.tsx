@@ -856,6 +856,7 @@ export function AvailableActionsPanel({
   const primaryActions = actions.filter(
     (action) => action.actionType !== 'TRANSMUTE' && action.actionType !== 'BUY_MARKET_CARD',
   );
+  const marketAction = actions.find((action) => action.actionType === 'BUY_MARKET_CARD');
   const grouped = groupActions(primaryActions);
 
   return (
@@ -921,6 +922,42 @@ export function AvailableActionsPanel({
           >
             Transmute
           </button>
+        </section>
+      )}
+
+      {marketAction && game.market.length > 0 && (
+        <section className="turn-market">
+          <div className="turn-market-header">
+            <div>
+              <b>Market cards</b>
+              <span>
+                Buy a specific visible card
+                {marketAction.apCost === 0 ? ' for 0 AP with your Trade card bonus.' : ` for ${marketAction.apCost} AP.`}
+              </span>
+            </div>
+            {!marketAction.available && marketAction.disabledReason && (
+              <em>{marketAction.disabledReason}</em>
+            )}
+          </div>
+          <div className="market-cards compact-market">
+            {game.market.map((card) => {
+              const affordable = covers(view.resources, card.cost);
+              return (
+                <button
+                  key={card.id}
+                  className="market-card"
+                  disabled={busy || !marketAction.available || !affordable}
+                  onClick={() => send('BUY_MARKET_CARD', { cardId: card.id })}
+                >
+                  <small>{card.category}</small>
+                  <b>{card.name}</b>
+                  <p>{card.effect}</p>
+                  <em>Cost: {card.cost.gold} gold · {marketAction.apCost} AP</em>
+                  <span>{affordable ? `Buy this card` : `Need ${card.cost.gold} gold`}</span>
+                </button>
+              );
+            })}
+          </div>
         </section>
       )}
 
@@ -1313,10 +1350,13 @@ export function PhaseControls({
         <div className="phase-action-row warning-row">
           <div>
             <b>В долине появился монстр</b>
-            <span>Он блокирует ближайшее производство и усиливается каждый раунд.</span>
+            <span>
+              Он блокирует ближайшее производство, но не атакует сразу при появлении. Монстры
+              атакуют в конце раунда и усиливаются каждый второй раунд.
+            </span>
           </div>
           <button className="primary" disabled={busy} onClick={() => send('RESOLVE_ACTION')}>
-            Перейти к рынку
+            Продолжить
           </button>
         </div>
       );

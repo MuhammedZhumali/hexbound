@@ -118,11 +118,12 @@ Full stack:
 docker compose up --build
 ```
 
-In the Docker stack, the backend is exposed on host port `8082` by default, while the frontend
-remains at `http://localhost:5173`. This avoids conflicts with a backend started locally on port
-`8080`. Override the Docker port with `BACKEND_PORT` when needed.
+In the Docker stack, edge nginx is exposed on host port `80` by default and proxies the frontend,
+`/api`, and `/ws` through one public origin. Override `PUBLIC_PORT` when port `80` is already in
+use. The backend is still exposed on host port `8082` by default for direct local debugging; override
+that with `BACKEND_PORT` when needed.
 
-Open `http://localhost:5173`. The setup screen creates a seeded four-player lobby. Players choose unique Heroes during a private reverse-order hot-seat draft before snake placement begins.
+Open `http://localhost` or the configured public URL. The setup screen creates a seeded four-player lobby. Players choose unique Heroes during a private reverse-order hot-seat draft before snake placement begins.
 
 ## Current limitations
 

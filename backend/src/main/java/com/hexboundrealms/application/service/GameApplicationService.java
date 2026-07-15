@@ -513,8 +513,13 @@ public class GameApplicationService {
         .filter(h -> g.monsters.stream().anyMatch(m -> m.location().equals(h.coordinate()))
             || g.players.stream()
                 .filter(other -> !other.id.equals(p.id))
-                .flatMap(other -> other.settlements.stream())
-                .anyMatch(s -> s.location().equals(h.coordinate())))
+                .anyMatch(other ->
+                    other.settlements.stream().anyMatch(s -> s.location().equals(h.coordinate()))
+                        || (other.settlements.isEmpty()
+                            && other.hero != null
+                            && !other.hero.defeated()
+                            && other.hero.location() != null
+                            && other.hero.location().equals(h.coordinate()))))
         .map(h -> hexId(h.coordinate()))
         .toList();
   }

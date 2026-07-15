@@ -316,7 +316,6 @@ public final class DefaultGameEngine implements GameEngine {
       g.phase = GamePhase.MONSTER_EVENT;
       MonsterState monster = monsters.spawn(g, p);
       e.add(event("MONSTER_SPAWNED", "monsterId", monster.id()));
-      monsterAttack(g, monster, p, e);
     } else {
       ProductionResolver.ProductionReport report =
           production.resolve(g, roll, g.gameMode == GameMode.BEGINNER);
@@ -328,11 +327,15 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void monsterAttack(GameState g, MonsterState monster, PlayerState target, List<DomainEvent> e) {
-    if (target.settlements.isEmpty()) return;
-    SettlementState attacked =
-        target.settlements.stream()
-            .min(Comparator.comparingInt(s -> s.location().distanceTo(monster.location())))
-            .orElseThrow();
+    boolean attackingHero = target.settlements.isEmpty();
+    if (attackingHero && (target.hero == null || target.hero.defeated() || target.hero.location() == null)) return;
+    HexCoordinate attacked =
+        attackingHero
+            ? target.hero.location()
+            : target.settlements.stream()
+                .min(Comparator.comparingInt(s -> s.location().distanceTo(monster.location())))
+                .orElseThrow()
+                .location();
     int roll = die(g, 20);
     int monsterBonus = Math.max(0, monster.strength() - 10);
     int defenseTotal = 10 + target.fortificationTokens * 2;
@@ -341,7 +344,8 @@ public final class DefaultGameEngine implements GameEngine {
     int damage = margin < 0 ? 0 : margin < 5 ? 1 : 2;
     if (roll == 20) damage++;
     if (roll == 1) damage = 0;
-    applySettlementDamage(target, attacked.location(), damage);
+    if (attackingHero) applyHeroDamage(target, damage);
+    else applySettlementDamage(target, attacked, damage);
     g.lastCombatReport =
         List.of(
             new CombatReportEntry(
@@ -349,15 +353,15 @@ public final class DefaultGameEngine implements GameEngine {
                 target.id,
                 monster.id(),
                 monster.location(),
-                attacked.location(),
+                attacked,
                 "MONSTER_ATTACK",
                 roll,
                 null,
                 attackTotal,
                 defenseTotal,
                 damage,
-                0,
-                damage,
+                attackingHero ? damage : 0,
+                attackingHero ? 0 : damage,
                 0));
     e.add(
         new DomainEvent(
@@ -370,7 +374,9 @@ public final class DefaultGameEngine implements GameEngine {
                 "playerId",
                 target.id,
                 "target",
-                attacked.location(),
+                attacked,
+                "targetType",
+                attackingHero ? "HERO" : "SETTLEMENT",
                 "roll",
                 roll,
                 "attackTotal",
@@ -1009,12 +1015,7 @@ public final class DefaultGameEngine implements GameEngine {
                 hp,
                 monster.targetPlayerId(),
                 monster.tier()));
-      else {
-        int reward = monster.tier().equals("MINOR") ? 2 : 3;
-        p.resources = p.resources.add(ResourceType.GOLD, reward);
-        p.reputation = Math.min(12, p.reputation + 1);
-        e.add(event("MONSTER_DEFEATED", "monsterId", monster.id()));
-      }
+      else rewardMonsterDefeat(p, monster, e);
     }
     e.add(
         new DomainEvent(
@@ -1055,6 +1056,25 @@ public final class DefaultGameEngine implements GameEngine {
     int roll = g.forcedD20 != null ? g.forcedD20 : die(g, 20);
     g.forcedD20 = null;
     int total = roll + (p.hero.heroClass() == HeroClass.KNIGHT ? 2 : 0);
+    if (monster != null) {
+      g.lastCombatReport =
+          List.of(
+              new CombatReportEntry(
+                  p.id,
+                  null,
+                  monster.id(),
+                  p.hero.location(),
+                  c.target(),
+                  "SMALL_RAID",
+                  roll,
+                  null,
+                  total,
+                  11,
+                  total >= 11 ? 1 : 0,
+                  0,
+                  0,
+                  total >= 11 ? 1 : 0));
+    }
     if (total >= 11) {
       if (monster != null) {
         int hp = monster.hp() - 1;
@@ -1062,6 +1082,7 @@ public final class DefaultGameEngine implements GameEngine {
         if (hp > 0)
           g.monsters.add(new MonsterState(monster.id(), monster.type(), monster.location(),
               monster.strength(), hp, monster.targetPlayerId(), monster.tier()));
+        else rewardMonsterDefeat(p, monster, e);
       } else if (defender.resources.gold() > 0) {
         defender.resources = defender.resources.add(ResourceType.GOLD, -1);
         p.resources = p.resources.add(ResourceType.GOLD, 1);
@@ -1209,7 +1230,9 @@ public final class DefaultGameEngine implements GameEngine {
                       reaction,
                       defender.fortificationTokens));
       damage = reaction == ReactionType.EVACUATION ? Math.max(0, result.damage() - 1) : result.damage();
-      applySettlementDamage(defender, conflict.target(), damage);
+      boolean heroTarget = isVulnerableHeroAt(defender, conflict.target());
+      if (heroTarget) applyHeroDamage(defender, damage);
+      else applySettlementDamage(defender, conflict.target(), damage);
       if (reaction == ReactionType.EVACUATION && defender.resources.gold() > 0) {
         defender.resources = defender.resources.add(ResourceType.GOLD, -1);
         resourcesLost = 1;
@@ -1229,7 +1252,7 @@ public final class DefaultGameEngine implements GameEngine {
       success = result.success();
       outcome =
           success
-              ? "Full Attack dealt " + damage + " damage."
+              ? "Full Attack dealt " + damage + (heroTarget ? " hero damage." : " settlement damage.")
               : "Full Attack failed to deal damage.";
       if (resourcesStolen > 0) outcome += " Spoils: stole 1 " + title(stolenResource) + ".";
       if (result.counterDamage()) outcome += " Counterattack wounded an attacking unit.";
@@ -1247,8 +1270,8 @@ public final class DefaultGameEngine implements GameEngine {
                   result.attackTotal(),
                   result.defenseTotal(),
                   damage,
-                  result.counterDamage() ? 1 : 0,
-                  damage,
+                  heroTarget ? damage : result.counterDamage() ? 1 : 0,
+                  heroTarget ? 0 : damage,
                   0));
       e.add(conflictResolvedEvent(conflict, reaction, roll, defenderRoll, result.attackTotal(), result.defenseTotal(),
           damage, resourcesStolen, resourcesLost, stolenResource, outcome));
@@ -1293,9 +1316,20 @@ public final class DefaultGameEngine implements GameEngine {
   private PlayerState defenderAt(GameState g, PlayerState attacker, HexCoordinate target) {
     return g.players.stream()
         .filter(player -> !player.id.equals(attacker.id))
-        .filter(player -> player.settlements.stream().anyMatch(s -> s.location().equals(target)))
+        .filter(
+            player ->
+                player.settlements.stream().anyMatch(s -> s.location().equals(target))
+                    || isVulnerableHeroAt(player, target))
         .findFirst()
         .orElse(null);
+  }
+
+  private boolean isVulnerableHeroAt(PlayerState player, HexCoordinate target) {
+    return player.settlements.isEmpty()
+        && player.hero != null
+        && !player.hero.defeated()
+        && player.hero.location() != null
+        && player.hero.location().equals(target);
   }
 
   private void applySettlementDamage(PlayerState defender, HexCoordinate target, int damage) {
@@ -1311,6 +1345,40 @@ public final class DefaultGameEngine implements GameEngine {
                 })
             .filter(settlement -> settlement.durability() > 0)
             .toList();
+  }
+
+  private void applyHeroDamage(PlayerState defender, int damage) {
+    if (damage <= 0 || defender.hero == null || defender.hero.defeated()) return;
+    int hp = Math.max(0, defender.hero.hp() - damage);
+    defender.hero =
+        new HeroState(
+            defender.hero.heroClass(),
+            hp,
+            defender.hero.mana(),
+            defender.hero.grace(),
+            defender.hero.location(),
+            hp <= 0);
+  }
+
+  private void rewardMonsterDefeat(PlayerState player, MonsterState monster, List<DomainEvent> e) {
+    int reward = monster.tier().equals("MINOR") ? 2 : 3;
+    player.resources = player.resources.add(ResourceType.GOLD, reward);
+    player.reputation = Math.min(12, player.reputation + 1);
+    player.glory =
+        new GloryState(
+            player.glory.construction(),
+            player.glory.monsters() + 1,
+            player.glory.quests(),
+            player.glory.diplomacy(),
+            player.glory.battles(),
+            player.glory.artifacts());
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("playerId", player.id);
+    payload.put("monsterId", monster.id());
+    payload.put("monsterType", monster.type());
+    payload.put("gold", reward);
+    payload.put("glory", 1);
+    e.add(new DomainEvent("MONSTER_DEFEATED", payload));
   }
 
   private ResourceType stealOneResource(PlayerState defender, PlayerState attacker) {
@@ -1411,6 +1479,7 @@ public final class DefaultGameEngine implements GameEngine {
       if (hp > 0)
         g.monsters.add(new MonsterState(monster.id(), monster.type(), monster.location(),
             monster.strength(), hp, monster.targetPlayerId(), monster.tier()));
+      else rewardMonsterDefeat(p, monster, e);
     }
     g.lastCombatReport =
         List.of(
@@ -2043,13 +2112,18 @@ public final class DefaultGameEngine implements GameEngine {
     Map<String, Object> p = event.publicPayload();
     return switch (event.type()) {
       case "PRODUCTION_RESOLVED" -> productionMessage(g, p);
-      case "MONSTER_SPAWNED" -> "🎲 Roll 7: no production. A monster appears in the realm.";
+      case "MONSTER_SPAWNED" -> "🎲 Roll 7: no production. A monster appears in the realm and will attack at the end of the round.";
       case "MONSTER_ATTACKED" ->
           p.getOrDefault("monsterType", "Monster") + " attacked " + playerName(g, p.get("playerId"))
+              + ("HERO".equals(String.valueOf(p.getOrDefault("targetType", ""))) ? "'s hero" : "")
               + " at " + coordText(p.get("target")) + ": d20 " + p.getOrDefault("roll", "?")
               + ", attack " + p.getOrDefault("attackTotal", "?") + " vs defense "
               + p.getOrDefault("defenseTotal", "?") + ", damage " + p.getOrDefault("damage", 0)
               + ".";
+      case "MONSTER_DEFEATED" ->
+          playerName(g, p.get("playerId")) + " defeated " + p.getOrDefault("monsterType", "a monster")
+              + " and gained " + p.getOrDefault("gold", 0) + " Gold, +"
+              + p.getOrDefault("glory", 1) + " Monster Glory, and +1 reputation.";
       case "STARTING_OUTPOST_PLACED" ->
           playerName(g, p.get("playerId")) + " built a starting Outpost at " + coordText(p.get("at")) + ".";
       case "STARTING_ROAD_PLACED" ->

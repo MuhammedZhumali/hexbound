@@ -1947,6 +1947,36 @@ dd {
   gap: 0.5rem;
 }
 
+.turn-market {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem;
+  background: #f6fbf7;
+  border: 1px solid #d7eadc;
+  border-radius: 12px;
+}
+
+.turn-market-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.turn-market-header div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.turn-market-header span,
+.turn-market-header em {
+  color: #6d7c74;
+  font-size: 0.75rem;
+}
+
+.compact-market {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 .market-card {
   display: flex;
   min-height: 110px;
