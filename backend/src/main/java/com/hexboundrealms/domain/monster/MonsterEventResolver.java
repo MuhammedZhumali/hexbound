@@ -13,7 +13,12 @@ public final class MonsterEventResolver {
     Set<HexCoordinate> occupied = new HashSet<>();
     game.monsters.forEach(m -> occupied.add(m.location()));
     game.players.forEach(p -> p.settlements.forEach(s -> occupied.add(s.location())));
-    HexCoordinate origin = target.settlements.getFirst().location();
+    HexCoordinate origin =
+        !target.settlements.isEmpty()
+            ? target.settlements.getFirst().location()
+            : target.hero != null && target.hero.location() != null
+                ? target.hero.location()
+                : game.map.getFirst().coordinate();
     MapHex hex =
         game.map.stream()
             .filter(

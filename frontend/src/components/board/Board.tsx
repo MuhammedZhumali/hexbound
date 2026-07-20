@@ -67,12 +67,14 @@ export function Board({
   overlayType,
   explainInvalid,
   rolling = false,
+  rollingMode,
 }: {
   game: Game;
   legal?: string[];
   overlayType?: string;
   explainInvalid?: (hex: Hex) => void;
   rolling?: boolean;
+  rollingMode?: 'world' | 'combat';
 }) {
   const { selected, select, zoom, pan, setZoom, setPan } = useUi();
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | undefined>(undefined);
@@ -295,15 +297,24 @@ export function Board({
         </div>
       )}
 
-      <BoardDiceOverlay game={game} rolling={rolling} />
+      <BoardDiceOverlay game={game} rolling={rolling} rollingMode={rollingMode} />
     </div>
   );
 }
 
-function BoardDiceOverlay({ game, rolling }: { game: Game; rolling: boolean }) {
+function BoardDiceOverlay({
+  game,
+  rolling,
+  rollingMode,
+}: {
+  game: Game;
+  rolling: boolean;
+  rollingMode?: 'world' | 'combat';
+}) {
   const latestCombat = game.combatReport?.at(-1);
+  if (rollingMode === 'combat' && !latestCombat) return null;
   const preferWorldRoll =
-    rolling ||
+    rollingMode === 'world' ||
     game.phase === 'WORLD_ROLL' ||
     game.phase === 'PRODUCTION' ||
     (game.phase === 'MONSTER_EVENT' && latestCombat?.conflictType !== 'MONSTER_ATTACK');
@@ -318,8 +329,8 @@ function BoardDiceOverlay({ game, rolling }: { game: Game; rolling: boolean }) {
       <aside className="board-dice-overlay" aria-live="polite">
         <small>{latestCombat.conflictType === 'MONSTER_ATTACK' ? 'Monster attack' : 'Combat roll'}</small>
         <div className="d20-row">
-          <D20Die value={latestCombat.roll} rolling={rolling} label="ATK" />
-          {latestCombat.defenseRoll && <D20Die value={latestCombat.defenseRoll} rolling={rolling} label="DEF" />}
+          <D20Die value={latestCombat.roll} rolling={rollingMode === 'combat'} label="ATK" />
+          {latestCombat.defenseRoll && <D20Die value={latestCombat.defenseRoll} rolling={rollingMode === 'combat'} label="DEF" />}
         </div>
         <b>
           {latestCombat.attackTotal} vs {latestCombat.defenseTotal}
@@ -334,8 +345,8 @@ function BoardDiceOverlay({ game, rolling }: { game: Game; rolling: boolean }) {
     <aside className="board-dice-overlay" aria-live="polite">
       <small>World roll</small>
       <div className="d6-row">
-        <D6Die value={first} rolling={rolling} />
-        <D6Die value={second} rolling={rolling} />
+        <D6Die value={first} rolling={rollingMode === 'world' || (rolling && !rollingMode)} />
+        <D6Die value={second} rolling={rollingMode === 'world' || (rolling && !rollingMode)} />
       </div>
       <b>{rolling ? 'Rolling…' : `Total ${game.lastRoll}`}</b>
     </aside>

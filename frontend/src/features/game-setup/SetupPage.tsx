@@ -59,7 +59,7 @@ export function SetupPage() {
             onClick={() => setGameMode('BEGINNER')}
           >
             <b>Beginner / Fast</b>
-            <span>2 AP turns. Production triggers on rolled number and adjacent numbers.</span>
+            <span>4 AP turns. Production triggers on rolled number and adjacent numbers.</span>
           </button>
           <button
             type="button"

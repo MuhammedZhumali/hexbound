@@ -338,7 +338,8 @@ public final class DefaultGameEngine implements GameEngine {
                 .location();
     int roll = die(g, 20);
     int monsterBonus = Math.max(0, monster.strength() - 10);
-    int defenseTotal = 10 + target.fortificationTokens * 2;
+    Card blessedArmor = takeCard(target, "Blessed Armor");
+    int defenseTotal = 10 + target.fortificationTokens * 2 + (blessedArmor != null ? 4 : 0);
     int attackTotal = roll + monsterBonus;
     int margin = attackTotal - defenseTotal;
     int damage = margin < 0 ? 0 : margin < 5 ? 1 : 2;
@@ -383,6 +384,8 @@ public final class DefaultGameEngine implements GameEngine {
                 attackTotal,
                 "defenseTotal",
                 defenseTotal,
+                "cardRevealed",
+                blessedArmor == null ? "NONE" : blessedArmor.name(),
                 "damage",
                 damage)));
   }
@@ -572,9 +575,6 @@ public final class DefaultGameEngine implements GameEngine {
   private void proposeTrade(
       GameState g, PlayerState p, GameCommand.ProposeTrade c, List<DomainEvent> e) {
     requireTradePhase(g);
-    if (g.phase == GamePhase.PLAYER_TURNS) {
-      requireCurrentTurn(g, p);
-    }
     PlayerState target = g.players.stream().filter(x -> x.id.equals(c.targetPlayerId())).findFirst()
         .orElseThrow(() -> DomainException.of("INVALID_PLAYER", "Trade target not found"));
     if (target == p) throw DomainException.of("INVALID_TARGET", "Cannot trade with yourself");
@@ -858,6 +858,7 @@ public final class DefaultGameEngine implements GameEngine {
                 resultType,
                 "publicReward",
                 publicReward)));
+    completeQuestCardOnExplore(p, targetCoordinate, e);
     if (turn) e.add(event(deep ? "DEEP_EXPLORE_BY_ACTION_POINT" : "HEX_EXPLORED_BY_ACTION_POINT", "playerId", p.id));
     else finishAction(g, p, e, "EXPLORE_RESOLVED");
   }
@@ -1379,6 +1380,37 @@ public final class DefaultGameEngine implements GameEngine {
     payload.put("gold", reward);
     payload.put("glory", 1);
     e.add(new DomainEvent("MONSTER_DEFEATED", payload));
+  }
+
+  private void completeQuestCardOnExplore(PlayerState player, HexCoordinate target, List<DomainEvent> e) {
+    Optional<Card> quest = player.hand.stream().filter(card -> card.category() == CardType.QUEST).findFirst();
+    if (quest.isEmpty()) return;
+    Card card = quest.get();
+    player.hand.remove(card);
+    player.resources = player.resources.add(ResourceType.GOLD, 1);
+    player.reputation = Math.min(12, player.reputation + 1);
+    player.glory =
+        new GloryState(
+            player.glory.construction(),
+            player.glory.monsters(),
+            player.glory.quests() + 1,
+            player.glory.diplomacy(),
+            player.glory.battles(),
+            player.glory.artifacts());
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("playerId", player.id);
+    payload.put("cardName", card.name());
+    payload.put("target", target);
+    payload.put("gold", 1);
+    payload.put("glory", 1);
+    e.add(new DomainEvent("QUEST_CARD_COMPLETED", payload));
+  }
+
+  private Card takeCard(PlayerState player, String name) {
+    Optional<Card> card = player.hand.stream().filter(item -> item.name().equals(name)).findFirst();
+    if (card.isEmpty()) return null;
+    player.hand.remove(card.get());
+    return card.get();
   }
 
   private ResourceType stealOneResource(PlayerState defender, PlayerState attacker) {
@@ -1904,7 +1936,7 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private int baseActionPoints(GameState g) {
-    return g.gameMode == GameMode.BEGINNER ? 2 : 3;
+    return g.gameMode == GameMode.BEGINNER ? 4 : 3;
   }
 
   private void resetTurnDiscounts(PlayerState p) {
@@ -2119,11 +2151,23 @@ public final class DefaultGameEngine implements GameEngine {
               + " at " + coordText(p.get("target")) + ": d20 " + p.getOrDefault("roll", "?")
               + ", attack " + p.getOrDefault("attackTotal", "?") + " vs defense "
               + p.getOrDefault("defenseTotal", "?") + ", damage " + p.getOrDefault("damage", 0)
+              + ("NONE".equals(String.valueOf(p.getOrDefault("cardRevealed", "NONE")))
+                  ? ""
+                  : ". Card revealed: " + p.get("cardRevealed"))
               + ".";
       case "MONSTER_DEFEATED" ->
           playerName(g, p.get("playerId")) + " defeated " + p.getOrDefault("monsterType", "a monster")
               + " and gained " + p.getOrDefault("gold", 0) + " Gold, +"
               + p.getOrDefault("glory", 1) + " Monster Glory, and +1 reputation.";
+      case "MARKET_CARD_BOUGHT" ->
+          playerName(g, p.get("playerId")) + " bought " + p.getOrDefault("cardName", "a market card")
+              + ("QUEST".equals(String.valueOf(p.getOrDefault("category", "")))
+                  ? ". Quest objective: complete your next Explore or Deep Explore for +1 Quest Glory, +1 Gold, and +1 reputation."
+                  : ".");
+      case "QUEST_CARD_COMPLETED" ->
+          playerName(g, p.get("playerId")) + " completed " + p.getOrDefault("cardName", "a quest")
+              + " at " + coordText(p.get("target")) + " and gained " + p.getOrDefault("gold", 1)
+              + " Gold, +" + p.getOrDefault("glory", 1) + " Quest Glory, and +1 reputation.";
       case "STARTING_OUTPOST_PLACED" ->
           playerName(g, p.get("playerId")) + " built a starting Outpost at " + coordText(p.get("at")) + ".";
       case "STARTING_ROAD_PLACED" ->

@@ -1977,6 +1977,38 @@ dd {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
+.free-trade-card {
+  display: grid;
+  gap: 0.65rem;
+  background: #fbfaf4;
+  border-color: #e5d9bf;
+}
+
+.free-trade-card p,
+.pending-free-trades span {
+  margin: 0;
+  color: #6f7b73;
+  font-size: 0.78rem;
+}
+
+.free-trade-card label {
+  display: grid;
+  gap: 0.25rem;
+  color: #4f6058;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.free-trade-card input,
+.free-trade-card select {
+  width: 100%;
+}
+
+.pending-free-trades {
+  display: grid;
+  gap: 0.4rem;
+}
+
 .market-card {
   display: flex;
   min-height: 110px;

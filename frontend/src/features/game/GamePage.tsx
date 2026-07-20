@@ -181,6 +181,7 @@ export function GamePage() {
   const [joinColor, setJoinColor] = useState('BLUE');
   const [rulesOpen, setRulesOpen] = useState(false);
   const [rolling, setRolling] = useState(false);
+  const [rollingMode, setRollingMode] = useState<'world' | 'combat'>();
   const [error, setError] = useState('');
   const [invalidSelectionReason, setInvalidSelectionReason] = useState('');
   const [targetingMode, setTargetingMode] = useState<TargetingMode>();
@@ -262,7 +263,15 @@ export function GamePage() {
       setError('');
 
       if (variables.type === 'ROLL_WORLD') {
-        window.setTimeout(() => setRolling(false), 800);
+        window.setTimeout(() => {
+          setRolling(false);
+          setRollingMode(undefined);
+        }, 800);
+      } else if (isDiceCommand(variables.type)) {
+        window.setTimeout(() => {
+          setRolling(false);
+          setRollingMode(undefined);
+        }, 900);
       }
 
       if (variables.type === 'SELECT_ACTION') {
@@ -362,6 +371,7 @@ export function GamePage() {
     },
     onError: (cause) => {
       setRolling(false);
+      setRollingMode(undefined);
       setError(readableError((cause as Error).message));
       queryClient.invalidateQueries({ queryKey: ['game', id] });
     },
@@ -432,7 +442,13 @@ export function GamePage() {
   }
 
   function send(type: string, payload?: unknown) {
-    if (type === 'ROLL_WORLD') setRolling(true);
+    if (type === 'ROLL_WORLD') {
+      setRolling(true);
+      setRollingMode('world');
+    } else if (isDiceCommand(type)) {
+      setRolling(true);
+      setRollingMode('combat');
+    }
     setTargetingMode(undefined);
     mutation.mutate({ type, payload });
   }
@@ -464,7 +480,7 @@ export function GamePage() {
             <b>{game.gameMode === 'BEGINNER' ? 'Beginner / Fast mode' : 'Standard mode'}</b>
             <span>
               {game.gameMode === 'BEGINNER'
-                ? '2 AP per turn. Production triggers more often.'
+                ? '4 AP per turn. Production triggers more often.'
                 : '3 AP per turn. Normal production pace.'}
             </span>
           </div>
@@ -615,7 +631,7 @@ export function GamePage() {
           HEXBOUND <i>REALMS</i>
         </div>
         <span className={`phase-badge phase-${game.phase.toLowerCase()}`}>{game.phase.replaceAll('_', ' ')}</span>
-        <span className="header-meta">{game.gameMode === 'BEGINNER' ? 'Beginner · 2 AP' : 'Standard · 3 AP'}</span>
+        <span className="header-meta">{game.gameMode === 'BEGINNER' ? 'Beginner · 4 AP' : 'Standard · 3 AP'}</span>
         <span className="header-meta">Round {game.roundNumber}</span>
         <span className="header-meta">{current ? `You are ${current.displayName}` : 'Choose your player'}</span>
         <span className="header-meta">{activePlayer ? `Now: ${activePlayer.displayName}` : 'No active player'}</span>
@@ -659,6 +675,7 @@ export function GamePage() {
           overlayType={targetingMode?.actionType ?? targetingMode?.targetType}
           explainInvalid={(hex) => setInvalidSelectionReason(invalidHexReason(game, hex.terrain))}
           rolling={rolling}
+          rollingMode={rollingMode}
         />
       </section>
       <PlayerPanel view={view} />
@@ -866,7 +883,7 @@ export function AvailableActionsPanel({
           <p className="eyebrow">Available Actions</p>
           <h3>
             {currentName} Turn · {activeCard} card · Action Points: {view.basicActionPoints} /{' '}
-            {game.gameMode === 'BEGINNER' ? 2 : 3}
+            {game.gameMode === 'BEGINNER' ? 4 : 3}
           </h3>
         </div>
         {view.basicActionPoints === 0 && <span className="ap-empty">End Turn recommended</span>}
@@ -1114,6 +1131,46 @@ export function PhaseControls({
   useEffect(() => setDraftAction(undefined), [view?.playerId, game.phase, view?.selectedAction]);
 
   if (!view) return null;
+
+  const freeTradeEmpty = (): Resources => ({ wood: 0, food: 0, ore: 0, stone: 0, gold: 0 });
+  const freeTradeOffered = freeTradeEmpty();
+  const freeTradeRequested = freeTradeEmpty();
+  freeTradeOffered[offerType] = offerAmount;
+  freeTradeRequested[requestType] = requestAmount;
+  const freeTradePending = (game.tradeProposals ?? []).filter((proposal) => proposal.status === 'PENDING');
+  const freePlayerTradePanel = (
+    <div className="resolution-card free-trade-card">
+      <h3>Free player trade</h3>
+      <p>Player-to-player offers are always free during player turns and do not spend AP.</p>
+      <label>Trade with<select value={tradeTarget} onChange={(event) => setTradeTarget(event.target.value)}>
+        <option value="">Choose player</option>
+        {game.players.filter((player) => player.id !== view.playerId).map((player) =>
+          <option key={player.id} value={player.id}>{player.displayName}</option>)}
+      </select></label>
+      <label>Offer<select value={offerType} onChange={(event) => setOfferType(event.target.value as keyof Resources)}>{resourceOptions()}</select>
+        <input type="number" min="0" value={offerAmount} onChange={(event) => setOfferAmount(Math.max(0, Number(event.target.value)))} /></label>
+      <label>Request<select value={requestType} onChange={(event) => setRequestType(event.target.value as keyof Resources)}>{resourceOptions()}</select>
+        <input type="number" min="0" value={requestAmount} onChange={(event) => setRequestAmount(Math.max(0, Number(event.target.value)))} /></label>
+      <label>Offer gold<input type="number" min="0" value={offeredGold} onChange={(event) => setOfferedGold(Math.max(0, Number(event.target.value)))} /></label>
+      <label>Request gold<input type="number" min="0" value={requestedGold} onChange={(event) => setRequestedGold(Math.max(0, Number(event.target.value)))} /></label>
+      <button className="primary" disabled={busy || !tradeTarget} onClick={() => send('PROPOSE_TRADE', {
+        targetPlayerId: tradeTarget,
+        offeredResources: freeTradeOffered,
+        requestedResources: freeTradeRequested,
+        offeredGold,
+        requestedGold,
+      })}>Propose free trade</button>
+      <div className="pending-free-trades">
+        <b>Pending proposals</b>
+        {freeTradePending.length === 0 && <span>No proposals right now.</span>}
+        {freeTradePending.map((proposal) => <div key={proposal.proposalId} className="phase-action-row">
+          <span>{game.players.find((p) => p.id === proposal.proposerPlayerId)?.displayName} → {game.players.find((p) => p.id === proposal.targetPlayerId)?.displayName}</span>
+          {proposal.targetPlayerId === view.playerId && <><button onClick={() => send('ACCEPT_TRADE', { proposalId: proposal.proposalId })}>Accept</button><button onClick={() => send('REJECT_TRADE', { proposalId: proposal.proposalId })}>Reject</button></>}
+          {proposal.proposerPlayerId === view.playerId && <button onClick={() => send('CANCEL_TRADE', { proposalId: proposal.proposalId })}>Cancel</button>}
+        </div>)}
+      </div>
+    </div>
+  );
 
   if (game.phase === 'WAITING_FOR_DEFENDER_REACTION') {
     const conflict = game.pendingConflict;
@@ -1412,6 +1469,7 @@ export function PhaseControls({
               game={game}
               send={send}
             />
+            {freePlayerTradePanel}
           </div>
         );
       }
@@ -2016,6 +2074,18 @@ function AttackPreviewCard({
 
 function isAttackAction(actionType: string) {
   return actionType.includes('ATTACK') || actionType.includes('RAID') || actionType === 'ARCANE_BOLT';
+}
+
+function isDiceCommand(type: string) {
+  return (
+    type === 'ROLL_WORLD' ||
+    type === 'SMALL_RAID' ||
+    type === 'FULL_ATTACK' ||
+    type === 'ARCANE_BOLT' ||
+    type === 'DEFENDER_REACTION' ||
+    type.startsWith('DEFENDER_REACTION_') ||
+    type === 'RESOLVE_ATTACK_BATCH'
+  );
 }
 
 function groupActions(actions: LegalAction[]) {

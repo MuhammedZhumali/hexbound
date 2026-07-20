@@ -36,14 +36,24 @@ public final class CardCatalog {
               names[i],
               types[i % types.length],
               new Resources(0, 0, 0, 0, 1 + (i % 2)),
-              switch (types[i % types.length]) {
-                case TACTIC -> "Gain +2 on an eligible declared roll.";
-                case REACTION -> "Reveal during defense for a tactical response.";
-                case ALLY -> "Add one temporary support power.";
-                case UPGRADE -> "Improve a settlement or army capability.";
-                case QUEST -> "Complete its objective for a non-purchase Glory opportunity.";
-              },
+              effect(names[i], types[i % types.length]),
               "See card category"));
     return List.copyOf(cards);
+  }
+
+  private String effect(String name, CardType type) {
+    if (name.equals("Ancient Map")) {
+      return "Quest: complete your next Explore or Deep Explore for +1 Quest Glory, +1 Gold, and +1 reputation.";
+    }
+    if (name.equals("Blessed Armor")) {
+      return "Reaction: automatically reveal against a monster attack for +4 defense, then discard.";
+    }
+    return switch (type) {
+      case TACTIC -> "Gain +2 on an eligible declared roll.";
+      case REACTION -> "Reveal during defense for a tactical response.";
+      case ALLY -> "Add one temporary support power.";
+      case UPGRADE -> "Improve a settlement or army capability.";
+      case QUEST -> "Quest: complete your next Explore or Deep Explore for +1 Quest Glory, +1 Gold, and +1 reputation.";
+    };
   }
 }
