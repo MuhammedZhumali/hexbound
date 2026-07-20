@@ -1163,8 +1163,7 @@ public final class DefaultGameEngine implements GameEngine {
             .filter(u -> !u.garrison() && u.fatigue() != FatigueState.EXHAUSTED)
             .toList();
     if (conflict.attackType() == ConflictAttackType.SMALL_RAID) {
-      int reactionDefense =
-          reaction == ReactionType.SHIELD ? 4 : reaction == ReactionType.COUNTERATTACK ? 1 : 0;
+      int reactionDefense = reactionDefense(reaction);
       int attackTotal = roll + heroBonus + attackerCardBonus;
       int defenseTotal = defenderRoll + reactionDefense + defenderCardBonus;
       success = attackTotal >= defenseTotal;
@@ -1209,7 +1208,8 @@ public final class DefaultGameEngine implements GameEngine {
                   0,
                   0));
       e.add(conflictResolvedEvent(conflict, reaction, roll, defenderRoll, attackTotal, defenseTotal, 0,
-          resourcesStolen, resourcesLost, stolenResource, outcome));
+          resourcesStolen, resourcesLost, stolenResource, outcome,
+          defenseBreakdown(defenderRoll, 0, defenderCardBonus, reaction, 0)));
     } else {
       int armyBonus = army.calculateArmyBonus(army.armyPower(attackers, true, false));
       int defenseArmy =
@@ -1275,7 +1275,8 @@ public final class DefaultGameEngine implements GameEngine {
                   heroTarget ? 0 : damage,
                   0));
       e.add(conflictResolvedEvent(conflict, reaction, roll, defenderRoll, result.attackTotal(), result.defenseTotal(),
-          damage, resourcesStolen, resourcesLost, stolenResource, outcome));
+          damage, resourcesStolen, resourcesLost, stolenResource, outcome,
+          defenseBreakdown(defenderRoll, defenseArmy, defenderCardBonus, reaction, defender.fortificationTokens)));
     }
     g.pendingConflict = null;
     g.phase = GamePhase.PLAYER_TURNS;
@@ -1293,7 +1294,8 @@ public final class DefaultGameEngine implements GameEngine {
       int resourcesStolen,
       int resourcesLost,
       String stolenResource,
-      String outcome) {
+      String outcome,
+      String defenseBreakdown) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("attackerId", conflict.attackerPlayerId());
     payload.put("defenderId", conflict.defenderPlayerId());
@@ -1308,10 +1310,31 @@ public final class DefaultGameEngine implements GameEngine {
     payload.put("resourcesStolen", resourcesStolen);
     payload.put("resourcesLost", resourcesLost);
     payload.put("stolenResource", stolenResource);
+    payload.put("defenseBreakdown", defenseBreakdown);
     payload.put("attackerCard", conflict.attackerActionCard() == null ? "NONE" : conflict.attackerActionCard());
     payload.put("defenderCard", conflict.defenderActionCard() == null ? "NONE" : conflict.defenderActionCard());
     payload.put("outcome", outcome);
     return new DomainEvent("CONFLICT_RESOLVED", payload);
+  }
+
+  private int reactionDefense(ReactionType reaction) {
+    return reaction == ReactionType.SHIELD ? 4 : reaction == ReactionType.COUNTERATTACK ? 1 : 0;
+  }
+
+  private String defenseBreakdown(
+      int defenderRoll,
+      int armyDefense,
+      int defenderCardBonus,
+      ReactionType reaction,
+      int fortificationTokens) {
+    List<String> parts = new ArrayList<>();
+    parts.add("d20 " + defenderRoll);
+    if (armyDefense != 0) parts.add("garrison +" + armyDefense);
+    int reactionBonus = reactionDefense(reaction);
+    if (reactionBonus != 0) parts.add(reaction.name().toLowerCase() + " +" + reactionBonus);
+    if (defenderCardBonus != 0) parts.add("card +" + defenderCardBonus);
+    if (fortificationTokens != 0) parts.add("fortify +" + (fortificationTokens * 2));
+    return String.join(", ", parts);
   }
 
   private PlayerState defenderAt(GameState g, PlayerState attacker, HexCoordinate target) {
@@ -1345,7 +1368,11 @@ public final class DefaultGameEngine implements GameEngine {
                       settlement.id(), settlement.location(), settlement.level(), remaining);
                 })
             .filter(settlement -> settlement.durability() > 0)
-            .toList();
+            .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+  }
+
+  private int settlementMaxDurability(SettlementLevel level) {
+    return level == SettlementLevel.CITY ? 4 : 2;
   }
 
   private void applyHeroDamage(PlayerState defender, int damage) {
@@ -1426,24 +1453,24 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void woundFirstAttacker(PlayerState attacker, List<UnitState> attackers) {
-    attackers.stream()
-        .findFirst()
-        .ifPresent(
-            wounded ->
-                attacker.units =
-                    attacker.units.stream()
-                        .map(
-                            unit ->
-                                unit.id().equals(wounded.id())
-                                    ? new UnitState(
-                                        unit.id(),
-                                        unit.type(),
-                                        unit.fatigue(),
-                                        true,
-                                        unit.garrison(),
-                                        unit.contractUntilRound())
-                                    : unit)
-                        .toList());
+    attackers.stream().findFirst().ifPresent(wounded -> attacker.units =
+        attacker.units.stream()
+            .filter(
+                unit ->
+                    !unit.id().equals(wounded.id())
+                        || !(unit.wounded() && unit.fatigue() == FatigueState.EXHAUSTED))
+            .map(
+                unit ->
+                    unit.id().equals(wounded.id())
+                        ? new UnitState(
+                            unit.id(),
+                            unit.type(),
+                            unit.fatigue(),
+                            true,
+                            unit.garrison(),
+                            unit.contractUntilRound())
+                        : unit)
+            .collect(java.util.stream.Collectors.toCollection(ArrayList::new)));
   }
 
   private void priestHeal(GameState g, PlayerState p, GameCommand.PriestHeal c, List<DomainEvent> e) {
@@ -1611,12 +1638,56 @@ public final class DefaultGameEngine implements GameEngine {
     requireTurnAction(g, p);
     requireHero(p, HeroClass.ENGINEER);
     if (p.repairUsed) throw DomainException.of("ACTION_ALREADY_USED", "Repair already used");
+    boolean[] repairedSettlement = {false};
+    p.settlements =
+        p.settlements.stream()
+            .map(
+                settlement -> {
+                  if (!settlement.location().equals(c.target())) return settlement;
+                  int max = settlementMaxDurability(settlement.level());
+                  if (settlement.durability() >= max) return settlement;
+                  repairedSettlement[0] = true;
+                  return new SettlementState(
+                      settlement.id(),
+                      settlement.location(),
+                      settlement.level(),
+                      Math.min(max, settlement.durability() + 1));
+                })
+            .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+    boolean repaired = repairedSettlement[0];
+    boolean unitHealed = false;
+    if (!repaired) {
+      List<UnitState> nextUnits = new ArrayList<>();
+      for (UnitState unit : p.units) {
+        if (!unitHealed && unit.wounded()) {
+          nextUnits.add(
+              new UnitState(
+                  unit.id(),
+                  unit.type(),
+                  unit.fatigue(),
+                  false,
+                  unit.garrison(),
+                  unit.contractUntilRound()));
+          unitHealed = true;
+        } else {
+          nextUnits.add(unit);
+        }
+      }
+      p.units = nextUnits;
+      repaired = unitHealed;
+    }
+    if (!repaired) throw DomainException.of("INVALID_TARGET", "No damaged outpost or wounded unit to repair");
     p.repairUsed = true;
-    p.units = p.units.stream()
-        .map(u -> u.wounded() ? new UnitState(u.id(), u.type(), u.fatigue(), false,
-            u.garrison(), u.contractUntilRound()) : u)
-        .toList();
-    e.add(event("ENGINEER_REPAIR_USED", "playerId", p.id));
+    e.add(
+        new DomainEvent(
+            "ENGINEER_REPAIR_USED",
+            Map.of(
+                "playerId",
+                p.id,
+                "target",
+                c.target(),
+                "repairedUnit",
+                unitHealed)));
   }
 
   private void marketDeal(GameState g, PlayerState p, GameCommand.MarketDeal c, List<DomainEvent> e) {
@@ -2235,10 +2306,14 @@ public final class DefaultGameEngine implements GameEngine {
               + ", lost " + p.getOrDefault("resourcesLost", 0)
               + ". Cards revealed: attacker " + p.getOrDefault("attackerCard", "NONE")
               + ", defender " + p.getOrDefault("defenderCard", "NONE")
+              + ". Defense: " + p.getOrDefault("defenseBreakdown", "unknown")
               + ". " + p.getOrDefault("outcome", "");
       case "HERO_MOVED" -> playerName(g, p.get("playerId")) + " moved their Hero.";
       case "RANGER_SWIFT_MOVE_USED" -> playerName(g, p.get("playerId")) + " used Swift Move.";
-      case "ENGINEER_REPAIR_USED" -> playerName(g, p.get("playerId")) + " repaired damage.";
+      case "ENGINEER_REPAIR_USED" ->
+          playerName(g, p.get("playerId")) + " repaired "
+              + (Boolean.TRUE.equals(p.get("repairedUnit")) ? "a wounded unit" : "a settlement")
+              + " at " + coordText(p.get("target")) + ".";
       case "MERCHANT_MARKET_DEAL_USED" -> playerName(g, p.get("playerId")) + " made a Market Deal.";
       case "PLAYER_TURN_STARTED" -> "Turn: " + playerName(g, p.get("playerId")) + " is active.";
       case "PLAYER_TURNS_COMPLETE" -> "All players finished their action turns.";

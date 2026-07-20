@@ -380,8 +380,9 @@ public class GameApplicationService {
             p.quickRoadUsed ? "Quick Road already used." : apResourceOrTargetReason(p, 0, quickRoadCost, roadTargets),
             true, TargetType.HEX, roadTargets));
         result.add(action("REPAIR", "Repair", "Repair 1 damage once per turn.", 0,
-            Resources.none(), !p.repairUsed, p.repairUsed ? "Repair already used." : null,
-            true, TargetType.FRIENDLY_HEX, friendlyTargets));
+            Resources.none(), !p.repairUsed && hasRepairTarget(p),
+            p.repairUsed ? "Repair already used." : !hasRepairTarget(p) ? "No damaged outpost or wounded unit." : null,
+            true, TargetType.FRIENDLY_HEX, repairTargets(p)));
       }
     }
   }
@@ -553,6 +554,29 @@ public class GameApplicationService {
 
   private boolean hasDamagedFriendly(PlayerState p) {
     return (p.hero != null && p.hero.hp() < 3) || p.units.stream().anyMatch(UnitState::wounded);
+  }
+
+  private boolean hasRepairTarget(PlayerState p) {
+    return p.settlements.stream()
+            .anyMatch(settlement -> settlement.durability() < settlementMaxDurability(settlement.level()))
+        || p.units.stream().anyMatch(UnitState::wounded);
+  }
+
+  private List<String> repairTargets(PlayerState p) {
+    List<String> targets = new ArrayList<>();
+    p.settlements.stream()
+        .filter(settlement -> settlement.durability() < settlementMaxDurability(settlement.level()))
+        .map(SettlementState::location)
+        .map(this::hexId)
+        .forEach(targets::add);
+    if (p.units.stream().anyMatch(UnitState::wounded) && p.hero != null && p.hero.location() != null) {
+      targets.add(hexId(p.hero.location()));
+    }
+    return targets.stream().distinct().toList();
+  }
+
+  private int settlementMaxDurability(SettlementLevel level) {
+    return level == SettlementLevel.CITY ? 4 : 2;
   }
 
   private int totalResources(Resources resources) {

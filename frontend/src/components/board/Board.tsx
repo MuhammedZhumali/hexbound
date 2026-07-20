@@ -314,10 +314,11 @@ function BoardDiceOverlay({
   const latestCombat = game.combatReport?.at(-1);
   if (rollingMode === 'combat' && !latestCombat) return null;
   const preferWorldRoll =
-    rollingMode === 'world' ||
-    game.phase === 'WORLD_ROLL' ||
-    game.phase === 'PRODUCTION' ||
-    (game.phase === 'MONSTER_EVENT' && latestCombat?.conflictType !== 'MONSTER_ATTACK');
+    rollingMode !== 'combat' &&
+    (rollingMode === 'world' ||
+      game.phase === 'WORLD_ROLL' ||
+      game.phase === 'PRODUCTION' ||
+      (game.phase === 'MONSTER_EVENT' && latestCombat?.conflictType !== 'MONSTER_ATTACK'));
   const showCombat =
     latestCombat &&
     !preferWorldRoll &&

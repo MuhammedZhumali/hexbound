@@ -268,10 +268,18 @@ export function GamePage() {
           setRollingMode(undefined);
         }, 800);
       } else if (isDiceCommand(variables.type)) {
-        window.setTimeout(() => {
-          setRolling(false);
-          setRollingMode(undefined);
-        }, 900);
+        const previousCombat = game?.combatReport?.at(-1);
+        const nextCombat = updatedGame.combatReport?.at(-1);
+        const combatChanged =
+          nextCombat && JSON.stringify(nextCombat) !== JSON.stringify(previousCombat);
+        if (combatChanged) {
+          setRolling(true);
+          setRollingMode('combat');
+          window.setTimeout(() => {
+            setRolling(false);
+            setRollingMode(undefined);
+          }, 900);
+        }
       }
 
       if (variables.type === 'SELECT_ACTION') {
@@ -446,8 +454,8 @@ export function GamePage() {
       setRolling(true);
       setRollingMode('world');
     } else if (isDiceCommand(type)) {
-      setRolling(true);
-      setRollingMode('combat');
+      setRolling(false);
+      setRollingMode(undefined);
     }
     setTargetingMode(undefined);
     mutation.mutate({ type, payload });
@@ -2084,7 +2092,8 @@ function isDiceCommand(type: string) {
     type === 'ARCANE_BOLT' ||
     type === 'DEFENDER_REACTION' ||
     type.startsWith('DEFENDER_REACTION_') ||
-    type === 'RESOLVE_ATTACK_BATCH'
+    type === 'RESOLVE_ATTACK_BATCH' ||
+    type === 'END_ROUND'
   );
 }
 
