@@ -1856,6 +1856,33 @@ dd {
   gap: 0.75rem;
 }
 
+.fortify-spend-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8rem;
+  border: 1px solid rgba(177, 127, 47, 0.28);
+  border-radius: 16px;
+  background: rgba(255, 252, 238, 0.9);
+}
+
+.fortify-spend-box label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 800;
+}
+
+.fortify-spend-box select {
+  min-width: 4rem;
+}
+
+.fortify-spend-box span {
+  color: #6f6356;
+  font-size: 0.85rem;
+}
+
 .reaction-grid button {
   min-height: 118px;
   display: grid;

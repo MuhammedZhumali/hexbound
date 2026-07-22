@@ -160,6 +160,11 @@ export type PrivateView = {
   selectedAction?: string;
   previousAction?: string;
   fortificationTokens: number;
+  fortifyTokenStockpile: number;
+  temporaryFortifyTokens: number;
+  freeFortifyAssignmentsRemaining: number;
+  assignedFortifyTokens: Record<string, number>;
+  temporaryAssignedFortifyTokens: Record<string, number>;
   basicActionPoints: number;
   settlements: Settlement[];
   roads: Road[];

@@ -96,6 +96,12 @@ public final class GameModel {
     NOTHING_FOUND
   }
 
+  public enum ExplorationState {
+    UNEXPLORED,
+    SCOUTED,
+    DEPLETED
+  }
+
   public enum SettlementLevel {
     OUTPOST,
     TOWN,
@@ -212,6 +218,9 @@ public final class GameModel {
           offeredGold, requestedGold, next);
     }
   }
+
+  public record TributeClaim(
+      UUID creditorPlayerId, UUID debtorPlayerId, int amount, int expiresAtRound) {}
 
   public record ExplorationResult(
       UUID playerId, HexCoordinate target, ExplorationResultType type, String description) {}
@@ -338,11 +347,18 @@ public final class GameModel {
     public List<Card> hand = new ArrayList<>();
     public Set<HexCoordinate> exploredRuins = new HashSet<>();
     public Set<HexCoordinate> exploredHexes = new HashSet<>();
+    public Map<String, ExplorationState> explorationStates = new HashMap<>();
     public SealProgress sealProgress = SealProgress.empty();
     public ActionType selectedAction;
     public ActionType previousAction;
     public boolean actionLocked;
     public int fortificationTokens;
+    public int fortifyTokenStockpile;
+    public int temporaryFortifyTokens;
+    public int freeFortifyAssignmentsRemaining;
+    public boolean freeFortifyBuyUsed;
+    public Map<String, Integer> assignedFortifyTokens = new HashMap<>();
+    public Map<String, Integer> temporaryAssignedFortifyTokens = new HashMap<>();
     public int basicActionPoints = 3;
     public boolean mainActionCompletedThisRound;
     public boolean freeExploreUsed;
@@ -397,6 +413,7 @@ public final class GameModel {
     public boolean hybridTurnMode;
     public List<HeroSwapProposal> heroSwapProposals = new ArrayList<>();
     public List<TradeProposal> tradeProposals = new ArrayList<>();
+    public List<TributeClaim> tributeClaims = new ArrayList<>();
     public List<ExplorationResult> explorationResults = new ArrayList<>();
     public PendingConflict pendingConflict;
     public Integer lastRoll;

@@ -9,6 +9,11 @@ it('shows mana and fatigue in private player view', () => {
     glory: { construction: 0 },
     reputation: 0,
     fortificationTokens: 0,
+    fortifyTokenStockpile: 0,
+    temporaryFortifyTokens: 0,
+    freeFortifyAssignmentsRemaining: 0,
+    assignedFortifyTokens: {},
+    temporaryAssignedFortifyTokens: {},
     activeSeals: [],
     hand: [],
     units: [

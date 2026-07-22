@@ -215,8 +215,15 @@ export function PlayerPanel({ view }: { view?: PrivateView }) {
         <dd>{view.reputation}</dd>
         <dt>Слава</dt>
         <dd>{Object.values(view.glory).reduce((sum, amount) => sum + amount, 0)} / 10</dd>
-        <dt>Укрепления</dt>
-        <dd>{view.fortificationTokens}</dd>
+        <dt>Fortify stockpile</dt>
+        <dd>{view.fortifyTokenStockpile ?? view.fortificationTokens ?? 0}</dd>
+        <dt>Temporary Fortify</dt>
+        <dd>{view.temporaryFortifyTokens ?? 0}</dd>
+        <dt>Assigned Fortify</dt>
+        <dd>
+          {Object.values(view.assignedFortifyTokens ?? {}).reduce((sum, amount) => sum + amount, 0)
+            + Object.values(view.temporaryAssignedFortifyTokens ?? {}).reduce((sum, amount) => sum + amount, 0)}
+        </dd>
       </dl>
 
       <h3>Печати пути</h3>

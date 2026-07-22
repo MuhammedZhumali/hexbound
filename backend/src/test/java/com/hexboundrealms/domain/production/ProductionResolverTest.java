@@ -11,7 +11,7 @@ class ProductionResolverTest {
   private final ProductionResolver resolver = new ProductionResolver();
 
   @Test
-  void beginnerModeProducesOnAdjacentNumbers() {
+  void productionOnlyTriggersOnExactRolledNumber() {
     GameState game = new GameState();
     PlayerState player =
         new PlayerState(UUID.randomUUID(), "Blue", PlayerColor.BLUE, "token", HeroClass.KNIGHT);
@@ -21,7 +21,8 @@ class ProductionResolverTest {
     game.map.add(new MapHex(at, TerrainType.MOUNTAIN, ResourceType.ORE, 6, null, null, null));
 
     assertThat(resolver.resolve(game, 5).production()).isEmpty();
-    assertThat(resolver.resolve(game, 5, true).production()).hasSize(1);
+    assertThat(player.resources.ore()).isZero();
+    assertThat(resolver.resolve(game, 6).production()).hasSize(1);
     assertThat(player.resources.ore()).isEqualTo(1);
   }
 }

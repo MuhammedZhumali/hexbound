@@ -19,6 +19,8 @@ public sealed interface GameCommand
         GameCommand.AcceptHeroSwap,
         GameCommand.RollWorld,
         GameCommand.BuyMarketCard,
+        GameCommand.BuyFortifyToken,
+        GameCommand.AssignFortifyToken,
         GameCommand.SelectAction,
         GameCommand.BuildRoad,
         GameCommand.BuildOutpost,
@@ -46,6 +48,8 @@ public sealed interface GameCommand
         GameCommand.SwiftMove,
         GameCommand.QuickRoad,
         GameCommand.Repair,
+        GameCommand.RestUnit,
+        GameCommand.FeedTroops,
         GameCommand.MarketDeal,
         GameCommand.LockAttackPlan,
         GameCommand.ResolveAttackBatch,
@@ -75,6 +79,10 @@ public sealed interface GameCommand
   record RollWorld(Integer forced) implements GameCommand {}
 
   record BuyMarketCard(UUID cardId) implements GameCommand {}
+
+  record BuyFortifyToken() implements GameCommand {}
+
+  record AssignFortifyToken(HexCoordinate target, int amount) implements GameCommand {}
 
   record SelectAction(ActionType action) implements GameCommand {}
 
@@ -111,7 +119,7 @@ public sealed interface GameCommand
 
   record SmallRaid(HexCoordinate target) implements GameCommand {}
 
-  record DefenderReaction(ReactionType reaction) implements GameCommand {}
+  record DefenderReaction(ReactionType reaction, int fortifyTokensToSpend) implements GameCommand {}
 
   record PriestHeal(HexCoordinate target) implements GameCommand {}
 
@@ -134,6 +142,10 @@ public sealed interface GameCommand
   record QuickRoad(HexCoordinate from, HexCoordinate to) implements GameCommand {}
 
   record Repair(HexCoordinate target) implements GameCommand {}
+
+  record RestUnit(UUID unitId) implements GameCommand {}
+
+  record FeedTroops(Set<UUID> unitIds) implements GameCommand {}
 
   record MarketDeal(ResourceType give, ResourceType receive) implements GameCommand {}
 

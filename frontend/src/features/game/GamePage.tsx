@@ -1052,6 +1052,9 @@ export function AvailableActionsPanel({
       case 'BUILD_OUTPOST':
         send('BUILD_OUTPOST', { at: target });
         return;
+      case 'ASSIGN_FORTIFY_TOKEN':
+        send('ASSIGN_FORTIFY_TOKEN', { target, amount: 1 });
+        return;
       case 'EXPLORE_HEX':
       case 'DEEP_EXPLORE':
       case 'SMALL_RAID':
@@ -1081,6 +1084,19 @@ export function AvailableActionsPanel({
       case 'BUY_MARKET_CARD': {
         const firstAffordable = game.market.find((card) => covers(view.resources, card.cost)) ?? game.market[0];
         if (firstAffordable) send('BUY_MARKET_CARD', { cardId: firstAffordable.id });
+        return;
+      }
+      case 'BUY_FORTIFY_TOKEN':
+        send('BUY_FORTIFY_TOKEN');
+        return;
+      case 'REST_UNIT': {
+        const unitId = action.validTargetUnitIds[0];
+        if (unitId) send('REST_UNIT', { unitId });
+        return;
+      }
+      case 'FEED_TROOPS': {
+        const unitIds = action.validTargetUnitIds.slice(0, 2);
+        if (unitIds.length) send('FEED_TROOPS', { unitIds });
         return;
       }
       case 'END_PLAYER_TURN':
@@ -1135,8 +1151,10 @@ export function PhaseControls({
   const [requestAmount, setRequestAmount] = useState(1);
   const [offeredGold, setOfferedGold] = useState(0);
   const [requestedGold, setRequestedGold] = useState(0);
+  const [fortifySpend, setFortifySpend] = useState(0);
 
   useEffect(() => setDraftAction(undefined), [view?.playerId, game.phase, view?.selectedAction]);
+  useEffect(() => setFortifySpend(0), [view?.playerId, game.phase, game.pendingConflict?.conflictId]);
 
   if (!view) return null;
 
@@ -1188,6 +1206,15 @@ export function PhaseControls({
     if (!conflict) {
       return <div className="waiting-turn">Waiting for conflict data…</div>;
     }
+    const targetKey = `${conflict.target.q},${conflict.target.r}`;
+    const assignedFortify =
+      (view.assignedFortifyTokens?.[targetKey] ?? 0) + (view.temporaryAssignedFortifyTokens?.[targetKey] ?? 0);
+    const fortifyCap = conflict.attackType === 'SMALL_RAID' ? 1 : 2;
+    const maxFortifySpend = Math.min(assignedFortify, fortifyCap);
+    const reactionPayload = (reaction: string) => ({
+      reaction,
+      fortifyTokensToSpend: Math.min(fortifySpend, maxFortifySpend),
+    });
     if (!isDefender) {
       return (
         <div className="waiting-turn defender-wait">
@@ -1211,20 +1238,38 @@ export function PhaseControls({
           {conflict.target.q},{conflict.target.r}. Pick one reaction; then the server will roll and reveal
           the conflict result.
         </p>
+        <div className="fortify-spend-box">
+          <b>Assigned Fortify on this settlement: {assignedFortify}</b>
+          <label>
+            Spend Fortify
+            <select
+              value={Math.min(fortifySpend, maxFortifySpend)}
+              onChange={(event) => setFortifySpend(Number(event.target.value))}
+              disabled={maxFortifySpend === 0}
+            >
+              {Array.from({ length: maxFortifySpend + 1 }, (_, value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <span>
+            Max {fortifyCap} for {conflict.attackType.replace('_', ' ')}. Fortify only protects this targeted settlement.
+          </span>
+        </div>
         <div className="reaction-grid">
-          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', { reaction: 'SHIELD' })}>
+          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', reactionPayload('SHIELD'))}>
             <b>Shield</b>
             <span>Reduce or block incoming damage/resource loss.</span>
           </button>
-          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', { reaction: 'COUNTERATTACK' })}>
+          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', reactionPayload('COUNTERATTACK'))}>
             <b>Counterattack</b>
             <span>Riskier response; can punish a failed attack.</span>
           </button>
-          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', { reaction: 'EVACUATION' })}>
+          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', reactionPayload('EVACUATION'))}>
             <b>Evacuation</b>
             <span>Avoid the worst effect but lose a smaller guaranteed amount.</span>
           </button>
-          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', { reaction: 'NONE' })}>
+          <button disabled={busy} onClick={() => send('DEFENDER_REACTION', reactionPayload('NONE'))}>
             <b>No Reaction</b>
             <span>Accept the attack and conserve defenses.</span>
           </button>
@@ -2098,7 +2143,7 @@ function isDiceCommand(type: string) {
 }
 
 function groupActions(actions: LegalAction[]) {
-  const order = ['Movement', 'Building', 'Trading', 'Exploration', 'Combat', 'Hero Skills', 'Cards', 'Turn'];
+  const order = ['Movement', 'Building', 'Trading', 'Exploration', 'Combat', 'Recovery', 'Hero Skills', 'Cards', 'Turn'];
   const grouped = Object.fromEntries(order.map((group) => [group, [] as LegalAction[]]));
   for (const action of actions) {
     grouped[actionGroup(action.actionType)].push(action);
@@ -2108,10 +2153,11 @@ function groupActions(actions: LegalAction[]) {
 
 function actionGroup(actionType: string) {
   if (actionType.includes('MOVE')) return 'Movement';
-  if (actionType.includes('BUILD') || actionType.includes('ROAD') || actionType === 'REPAIR') return 'Building';
+  if (actionType.includes('BUILD') || actionType.includes('ROAD') || actionType.includes('FORTIFY') || actionType === 'REPAIR') return 'Building';
   if (actionType.includes('TRADE') || actionType.includes('DEAL') || actionType === 'TRANSMUTE') return 'Trading';
   if (actionType.includes('EXPLORE') || actionType === 'SCOUT' || actionType === 'MAGE_REVEAL') return 'Exploration';
   if (actionType.includes('ATTACK') || actionType.includes('RAID') || actionType === 'ARCANE_BOLT' || actionType === 'CHALLENGE') return 'Combat';
+  if (actionType === 'REST_UNIT' || actionType === 'FEED_TROOPS') return 'Recovery';
   if (actionType.startsWith('PRIEST') || actionType.startsWith('MAGE') || actionType === 'SWIFT_MOVE' || actionType === 'QUICK_ROAD') return 'Hero Skills';
   if (actionType.includes('CARD')) return 'Cards';
   if (actionType.includes('END')) return 'Turn';

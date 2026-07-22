@@ -42,6 +42,8 @@ public final class DefaultGameEngine implements GameEngine {
       case GameCommand.AcceptHeroSwap c -> acceptHeroSwap(game, player, c, events);
       case GameCommand.RollWorld c -> roll(game, player, c, events);
       case GameCommand.BuyMarketCard c -> buyMarketCard(game, player, c, events);
+      case GameCommand.BuyFortifyToken ignored -> buyFortifyToken(game, player, events);
+      case GameCommand.AssignFortifyToken c -> assignFortifyToken(game, player, c, events);
       case GameCommand.SelectAction c -> select(game, player, c, events);
       case GameCommand.BuildRoad c -> buildRoad(game, player, c, events);
       case GameCommand.BuildOutpost c -> buildOutpost(game, player, c, events);
@@ -70,6 +72,8 @@ public final class DefaultGameEngine implements GameEngine {
       case GameCommand.Scout c -> scout(game, player, c, events);
       case GameCommand.QuickRoad c -> quickRoad(game, player, c, events);
       case GameCommand.Repair c -> repair(game, player, c, events);
+      case GameCommand.RestUnit c -> restUnit(game, player, c, events);
+      case GameCommand.FeedTroops c -> feedTroops(game, player, c, events);
       case GameCommand.LockAttackPlan c -> lockAttackPlan(game, player, c, events);
       case GameCommand.ResolveAttackBatch ignored -> resolveAttackBatch(game, player, events);
       case GameCommand.Fortify ignored -> fortify(game, player, events);
@@ -318,11 +322,45 @@ public final class DefaultGameEngine implements GameEngine {
       e.add(event("MONSTER_SPAWNED", "monsterId", monster.id()));
     } else {
       ProductionResolver.ProductionReport report =
-          production.resolve(g, roll, g.gameMode == GameMode.BEGINNER);
+          production.resolve(g, roll);
       g.phase = GamePhase.PRODUCTION;
       e.add(
           new DomainEvent(
               "PRODUCTION_RESOLVED", Map.of("roll", roll, "production", report.production())));
+      applyTributeClaims(g, report, e);
+    }
+  }
+
+  private void applyTributeClaims(
+      GameState g, ProductionResolver.ProductionReport report, List<DomainEvent> e) {
+    if (g.tributeClaims.isEmpty() || report.production().isEmpty()) return;
+    for (ProductionResolver.Production item : report.production()) {
+      TributeClaim claim =
+          g.tributeClaims.stream()
+              .filter(c -> c.debtorPlayerId().equals(item.playerId()))
+              .filter(c -> c.expiresAtRound() >= g.roundNumber)
+              .findFirst()
+              .orElse(null);
+      if (claim == null) continue;
+      PlayerState debtor = player(g, claim.debtorPlayerId());
+      PlayerState creditor = player(g, claim.creditorPlayerId());
+      if (resourceAmount(debtor.resources, item.resource()) <= 0) continue;
+      debtor.resources = debtor.resources.add(item.resource(), -1);
+      creditor.resources = creditor.resources.add(item.resource(), 1);
+      g.tributeClaims.remove(claim);
+      e.add(
+          new DomainEvent(
+              "TRIBUTE_CLAIM_PAID",
+              Map.of(
+                  "creditorPlayerId",
+                  creditor.id,
+                  "debtorPlayerId",
+                  debtor.id,
+                  "resource",
+                  item.resource(),
+                  "amount",
+                  1)));
+      return;
     }
   }
 
@@ -339,7 +377,7 @@ public final class DefaultGameEngine implements GameEngine {
     int roll = die(g, 20);
     int monsterBonus = Math.max(0, monster.strength() - 10);
     Card blessedArmor = takeCard(target, "Blessed Armor");
-    int defenseTotal = 10 + target.fortificationTokens * 2 + (blessedArmor != null ? 4 : 0);
+    int defenseTotal = 10 + (blessedArmor != null ? 4 : 0);
     int attackTotal = roll + monsterBonus;
     int margin = attackTotal - defenseTotal;
     int damage = margin < 0 ? 0 : margin < 5 ? 1 : 2;
@@ -431,6 +469,69 @@ public final class DefaultGameEngine implements GameEngine {
                 card.category(),
                 "cost",
                 card.cost())));
+  }
+
+  private void buyFortifyToken(GameState g, PlayerState p, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    int apCost =
+        (p.selectedAction == ActionType.TRADE || p.selectedAction == ActionType.FORTIFY)
+                && !p.freeFortifyBuyUsed
+            ? 0
+            : 1;
+    if (p.resources.gold() < 2) {
+      throw DomainException.of("INSUFFICIENT_RESOURCES", "Fortify Token costs 2 Gold");
+    }
+    spendActionPoints(p, apCost);
+    if (apCost == 0) p.freeFortifyBuyUsed = true;
+    p.resources = p.resources.add(ResourceType.GOLD, -2);
+    p.fortifyTokenStockpile += 1;
+    e.add(
+        new DomainEvent(
+            "FORTIFY_TOKEN_BOUGHT",
+            Map.of("playerId", p.id, "gold", 2, "stockpile", p.fortifyTokenStockpile)));
+  }
+
+  private void assignFortifyToken(
+      GameState g, PlayerState p, GameCommand.AssignFortifyToken c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    int amount = Math.max(1, c.amount());
+    if (amount > 2) {
+      throw DomainException.of("INVALID_PAYLOAD", "Assign at most 2 Fortify Tokens at once");
+    }
+    if (p.settlements.stream().noneMatch(s -> s.location().equals(c.target()))) {
+      throw DomainException.of("INVALID_TARGET", "Fortify Tokens can only be assigned to your settlement");
+    }
+    int available = p.fortifyTokenStockpile + p.temporaryFortifyTokens;
+    if (available < amount) {
+      throw DomainException.of("INSUFFICIENT_RESOURCES", "No Fortify Tokens available to assign");
+    }
+    int apCost =
+        p.selectedAction == ActionType.FORTIFY && p.freeFortifyAssignmentsRemaining >= amount ? 0 : 1;
+    spendActionPoints(p, apCost);
+    if (apCost == 0) p.freeFortifyAssignmentsRemaining -= amount;
+    String key = hexKey(c.target());
+    int temporaryToAssign = Math.min(amount, p.temporaryFortifyTokens);
+    int permanentToAssign = amount - temporaryToAssign;
+    if (temporaryToAssign > 0) {
+      p.temporaryFortifyTokens -= temporaryToAssign;
+      p.temporaryAssignedFortifyTokens.merge(key, temporaryToAssign, Integer::sum);
+    }
+    if (permanentToAssign > 0) {
+      p.fortifyTokenStockpile -= permanentToAssign;
+      p.assignedFortifyTokens.merge(key, permanentToAssign, Integer::sum);
+    }
+    e.add(
+        new DomainEvent(
+            "FORTIFY_TOKEN_ASSIGNED",
+            Map.of(
+                "playerId",
+                p.id,
+                "target",
+                c.target(),
+                "amount",
+                amount,
+                "temporary",
+                temporaryToAssign)));
   }
 
   private void select(GameState g, PlayerState p, GameCommand.SelectAction c, List<DomainEvent> e) {
@@ -791,9 +892,14 @@ public final class DefaultGameEngine implements GameEngine {
             .orElseThrow(() -> DomainException.of("INVALID_TARGET", "Unknown hex"));
     if (p.hero.location().distanceTo(targetCoordinate) > range)
       throw DomainException.of("INVALID_TARGET", "Select a hex within Hero exploration range");
-    if (!p.exploredHexes.add(targetCoordinate))
-      throw DomainException.of("INVALID_TARGET", "This hex was already explored by the Hero");
-    ExplorationResultType resultType = deep ? deepExplorationType(g, p, target) : explorationType(target);
+    String targetKey = hexKey(targetCoordinate);
+    ExplorationState state =
+        p.explorationStates.getOrDefault(targetKey, ExplorationState.UNEXPLORED);
+    boolean repeatSearch =
+        state == ExplorationState.DEPLETED || (!deep && state != ExplorationState.UNEXPLORED);
+    p.exploredHexes.add(targetCoordinate);
+    ExplorationResultType resultType =
+        repeatSearch ? repeatExplorationType(target) : deep ? deepExplorationType(g, p, target) : explorationType(target);
     String publicReward = "";
     if (resultType == ExplorationResultType.BONUS_RESOURCE) {
       ResourceType reward = target.resource() == null ? ResourceType.FOOD : target.resource();
@@ -824,9 +930,14 @@ public final class DefaultGameEngine implements GameEngine {
       p.reputation = Math.min(12, p.reputation + 1);
       publicReward = "+1 GOLD, +1 Reputation";
     } else if (resultType == ExplorationResultType.TEMPORARY_BUFF) {
-      p.fortificationTokens += 1;
-      publicReward = "+1 Fortification";
+      p.temporaryFortifyTokens += 1;
+      publicReward = "+1 temporary Fortify Token";
     }
+    p.explorationStates.put(
+        targetKey,
+        repeatSearch
+            ? state
+            : deep ? ExplorationState.DEPLETED : ExplorationState.SCOUTED);
     if (target.terrain() == TerrainType.RUIN) p.exploredRuins.add(targetCoordinate);
     SealProgress old = p.sealProgress;
     p.sealProgress =
@@ -886,6 +997,12 @@ public final class DefaultGameEngine implements GameEngine {
         : ExplorationResultType.ARTIFACT_CLUE;
   }
 
+  private ExplorationResultType repeatExplorationType(MapHex target) {
+    return target.resource() == null
+        ? ExplorationResultType.TRADE_CONTACT
+        : ExplorationResultType.BONUS_RESOURCE;
+  }
+
   private String explorationDescription(
       ExplorationResultType resultType, MapHex target, String publicReward) {
     String reward = publicReward == null || publicReward.isBlank() ? "" : " (" + publicReward + ")";
@@ -911,13 +1028,20 @@ public final class DefaultGameEngine implements GameEngine {
   private void fortify(GameState g, PlayerState p, List<DomainEvent> e) {
     if (g.phase == GamePhase.PLAYER_TURNS) {
       requireCurrentTurn(g, p);
-      spendActionPoints(p, 2);
-      p.fortificationTokens += p.hero.heroClass() == HeroClass.ENGINEER ? 3 : 2;
-      e.add(event("FORTIFIED", "playerId", p.id));
+      spendActionPoints(p, 1);
+      int tokens = p.hero.heroClass() == HeroClass.ENGINEER ? 2 : 1;
+      p.temporaryFortifyTokens += tokens;
+      p.freeFortifyAssignmentsRemaining += tokens;
+      e.add(
+          new DomainEvent(
+              "FORTIFIED",
+              Map.of("playerId", p.id, "temporaryTokens", tokens)));
       return;
     }
     resolutionAction(g, p, ActionType.FORTIFY);
-    p.fortificationTokens += p.hero.heroClass() == HeroClass.ENGINEER ? 3 : 2;
+    int tokens = p.hero.heroClass() == HeroClass.ENGINEER ? 2 : 1;
+    p.temporaryFortifyTokens += tokens;
+    p.freeFortifyAssignmentsRemaining += tokens;
     finishAction(g, p, e, "FORTIFIED");
   }
 
@@ -1049,6 +1173,10 @@ public final class DefaultGameEngine implements GameEngine {
     PlayerState defender = defenderAt(g, p, c.target());
     if (monster == null && defender == null)
       throw DomainException.of("INVALID_TARGET", "Small Raid needs an adjacent enemy or monster");
+    if (p.units.stream().anyMatch(unit -> !unit.garrison())
+        && p.units.stream().noneMatch(unit -> !unit.garrison() && unit.fatigue() != FatigueState.EXHAUSTED)) {
+      throw DomainException.of("UNIT_EXHAUSTED_CANNOT_ATTACK", "Exhausted units cannot initiate raids");
+    }
     spendActionPoints(p, 1);
     if (defender != null) {
       declareConflict(g, p, defender, c.target(), ConflictAttackType.SMALL_RAID, 1, e);
@@ -1138,19 +1266,30 @@ public final class DefaultGameEngine implements GameEngine {
     if (conflict == null) throw DomainException.of("NO_PENDING_CONFLICT", "No conflict is pending");
     if (!conflict.defenderPlayerId().equals(p.id))
       throw DomainException.of("NOT_DEFENDER", "Only the defending player can choose a reaction");
-    resolvePendingConflict(g, conflict, c.reaction() == null ? ReactionType.NONE : c.reaction(), e);
+    resolvePendingConflict(
+        g,
+        conflict,
+        c.reaction() == null ? ReactionType.NONE : c.reaction(),
+        Math.max(0, c.fortifyTokensToSpend()),
+        e);
   }
 
   private void resolvePendingConflict(
-      GameState g, PendingConflict conflict, ReactionType reaction, List<DomainEvent> e) {
+      GameState g,
+      PendingConflict conflict,
+      ReactionType reaction,
+      int requestedFortifyTokens,
+      List<DomainEvent> e) {
     PlayerState attacker = player(g, conflict.attackerPlayerId());
     PlayerState defender = player(g, conflict.defenderPlayerId());
     int roll = g.forcedD20 != null ? g.forcedD20 : die(g, 20);
     g.forcedD20 = null;
-    int defenderRoll = die(g, 20);
     int heroBonus = attacker.hero.heroClass() == HeroClass.KNIGHT ? 2 : 0;
     int attackerCardBonus = conflict.attackerActionCard() == ActionType.ATTACK ? 1 : 0;
     int defenderCardBonus = conflict.defenderActionCard() == ActionType.FORTIFY ? 1 : 0;
+    int fortifyLimit = conflict.attackType() == ConflictAttackType.SMALL_RAID ? 1 : 2;
+    int spentFortifyTokens =
+        spendAssignedFortifyTokens(defender, conflict.target(), requestedFortifyTokens, fortifyLimit);
     int resourcesStolen = 0;
     int resourcesLost = 0;
     String stolenResource = "NONE";
@@ -1165,7 +1304,7 @@ public final class DefaultGameEngine implements GameEngine {
     if (conflict.attackType() == ConflictAttackType.SMALL_RAID) {
       int reactionDefense = reactionDefense(reaction);
       int attackTotal = roll + heroBonus + attackerCardBonus;
-      int defenseTotal = defenderRoll + reactionDefense + defenderCardBonus;
+      int defenseTotal = 10 + reactionDefense + defenderCardBonus + spentFortifyTokens * 2;
       success = attackTotal >= defenseTotal;
       if (success) {
         if (reaction == ReactionType.EVACUATION) {
@@ -1183,9 +1322,11 @@ public final class DefaultGameEngine implements GameEngine {
         } else {
           outcome = "Raid succeeded, but no Gold was available to steal.";
         }
+        if (roll == 20) outcome += " Critical raid: clean escape.";
       } else {
         outcome = "Raid failed.";
-        if (reaction == ReactionType.COUNTERATTACK && defenseTotal - attackTotal >= 3) {
+        if (roll == 1) outcome += " Natural 1: the raiders overextended.";
+        if (reaction == ReactionType.COUNTERATTACK && defenseTotal - attackTotal >= 5) {
           woundFirstAttacker(attacker, attackers);
           outcome += " Counterattack wounded an attacking unit.";
         }
@@ -1200,37 +1341,33 @@ public final class DefaultGameEngine implements GameEngine {
                   conflict.target(),
                   "SMALL_RAID",
                   roll,
-                  defenderRoll,
+                  null,
                   attackTotal,
                   defenseTotal,
                   0,
                   0,
                   0,
                   0));
-      e.add(conflictResolvedEvent(conflict, reaction, roll, defenderRoll, attackTotal, defenseTotal, 0,
+      e.add(conflictResolvedEvent(conflict, reaction, roll, null, attackTotal, defenseTotal, 0,
           resourcesStolen, resourcesLost, stolenResource, outcome,
-          defenseBreakdown(defenderRoll, 0, defenderCardBonus, reaction, 0)));
+          defenseBreakdown(0, defenderCardBonus, reaction, spentFortifyTokens),
+          attackBreakdown(roll, heroBonus, 0, attackerCardBonus), spentFortifyTokens,
+          attackTotal - defenseTotal));
     } else {
       int armyBonus = army.calculateArmyBonus(army.armyPower(attackers, true, false));
       int defenseArmy =
           army.calculateArmyBonus(
               army.armyPower(defender.units.stream().filter(UnitState::garrison).toList(), false, true));
-      CombatResolver.CombatResult result =
-          new CombatResolver()
-              .resolve(
-                  new CombatResolver.CombatInput(
-                      roll,
-                      heroBonus,
-                      armyBonus,
-                      attackerCardBonus,
-                      0,
-                      0,
-                      defenseArmy,
-                      defenderCardBonus,
-                      defenderRoll - 10,
-                      reaction,
-                      defender.fortificationTokens));
-      damage = reaction == ReactionType.EVACUATION ? Math.max(0, result.damage() - 1) : result.damage();
+      int attackTotal = roll + heroBonus + armyBonus + attackerCardBonus;
+      int defenseTotal =
+          10 + defenseArmy + defenderCardBonus + reactionDefense(reaction) + spentFortifyTokens * 2;
+      int margin = attackTotal - defenseTotal;
+      success = attackTotal >= defenseTotal || roll == 20;
+      damage = success ? (margin >= 5 ? 2 : 1) : 0;
+      if (reaction == ReactionType.SHIELD && damage > 0) damage -= 1;
+      if (reaction == ReactionType.EVACUATION) damage = Math.max(0, damage - 1);
+      if (roll == 20 && damage > 0) damage += 1;
+      if (roll == 1) damage = 0;
       boolean heroTarget = isVulnerableHeroAt(defender, conflict.target());
       if (heroTarget) applyHeroDamage(defender, damage);
       else applySettlementDamage(defender, conflict.target(), damage);
@@ -1238,25 +1375,24 @@ public final class DefaultGameEngine implements GameEngine {
         defender.resources = defender.resources.add(ResourceType.GOLD, -1);
         resourcesLost = 1;
       }
-      if (damage > 0 && reaction != ReactionType.EVACUATION) {
-        ResourceType spoils = stealOneResource(defender, attacker);
-        if (spoils != null) {
-          resourcesStolen = 1;
-          stolenResource = spoils.name();
-        }
-      }
-      if (result.counterDamage()) woundFirstAttacker(attacker, attackers);
+      boolean counterDamage =
+          reaction == ReactionType.COUNTERATTACK && defenseTotal - attackTotal >= 3;
+      if (counterDamage) woundFirstAttacker(attacker, attackers);
       attacker.units =
           attacker.units.stream()
               .map(u -> attackers.contains(u) ? new FatigueResolver().afterBattle(u, roll == 1) : u)
               .toList();
-      success = result.success();
       outcome =
-          success
+          damage > 0
               ? "Full Attack dealt " + damage + (heroTarget ? " hero damage." : " settlement damage.")
               : "Full Attack failed to deal damage.";
-      if (resourcesStolen > 0) outcome += " Spoils: stole 1 " + title(stolenResource) + ".";
-      if (result.counterDamage()) outcome += " Counterattack wounded an attacking unit.";
+      if (damage > 0 && !heroTarget) {
+        createTributeClaim(g, attacker, defender, e);
+        outcome += " A tribute claim was created for the next production.";
+      }
+      if (roll == 20 && damage > 0) outcome += " Natural 20: extra pressure broke through.";
+      if (roll == 1) outcome += " Natural 1: the attack collapsed.";
+      if (counterDamage) outcome += " Counterattack wounded an attacking unit.";
       g.lastCombatReport =
           List.of(
               new CombatReportEntry(
@@ -1267,16 +1403,17 @@ public final class DefaultGameEngine implements GameEngine {
                   conflict.target(),
                   "FULL_ATTACK",
                   roll,
-                  defenderRoll,
-                  result.attackTotal(),
-                  result.defenseTotal(),
+                  null,
+                  attackTotal,
+                  defenseTotal,
                   damage,
-                  heroTarget ? damage : result.counterDamage() ? 1 : 0,
+                  heroTarget ? damage : counterDamage ? 1 : 0,
                   heroTarget ? 0 : damage,
                   0));
-      e.add(conflictResolvedEvent(conflict, reaction, roll, defenderRoll, result.attackTotal(), result.defenseTotal(),
+      e.add(conflictResolvedEvent(conflict, reaction, roll, null, attackTotal, defenseTotal,
           damage, resourcesStolen, resourcesLost, stolenResource, outcome,
-          defenseBreakdown(defenderRoll, defenseArmy, defenderCardBonus, reaction, defender.fortificationTokens)));
+          defenseBreakdown(defenseArmy, defenderCardBonus, reaction, spentFortifyTokens),
+          attackBreakdown(roll, heroBonus, armyBonus, attackerCardBonus), spentFortifyTokens, margin));
     }
     g.pendingConflict = null;
     g.phase = GamePhase.PLAYER_TURNS;
@@ -1287,7 +1424,7 @@ public final class DefaultGameEngine implements GameEngine {
       PendingConflict conflict,
       ReactionType reaction,
       int roll,
-      int defenderRoll,
+      Integer defenderRoll,
       int attackTotal,
       int defenseTotal,
       int damage,
@@ -1295,7 +1432,10 @@ public final class DefaultGameEngine implements GameEngine {
       int resourcesLost,
       String stolenResource,
       String outcome,
-      String defenseBreakdown) {
+      String defenseBreakdown,
+      String attackerBreakdown,
+      int fortifyTokensSpent,
+      int margin) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("attackerId", conflict.attackerPlayerId());
     payload.put("defenderId", conflict.defenderPlayerId());
@@ -1311,6 +1451,9 @@ public final class DefaultGameEngine implements GameEngine {
     payload.put("resourcesLost", resourcesLost);
     payload.put("stolenResource", stolenResource);
     payload.put("defenseBreakdown", defenseBreakdown);
+    payload.put("attackerBreakdown", attackerBreakdown);
+    payload.put("fortifyTokensSpent", fortifyTokensSpent);
+    payload.put("margin", margin);
     payload.put("attackerCard", conflict.attackerActionCard() == null ? "NONE" : conflict.attackerActionCard());
     payload.put("defenderCard", conflict.defenderActionCard() == null ? "NONE" : conflict.defenderActionCard());
     payload.put("outcome", outcome);
@@ -1322,19 +1465,79 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private String defenseBreakdown(
-      int defenderRoll,
       int armyDefense,
       int defenderCardBonus,
       ReactionType reaction,
-      int fortificationTokens) {
+      int fortifyTokensSpent) {
     List<String> parts = new ArrayList<>();
-    parts.add("d20 " + defenderRoll);
+    parts.add("base 10");
     if (armyDefense != 0) parts.add("garrison +" + armyDefense);
     int reactionBonus = reactionDefense(reaction);
     if (reactionBonus != 0) parts.add(reaction.name().toLowerCase() + " +" + reactionBonus);
     if (defenderCardBonus != 0) parts.add("card +" + defenderCardBonus);
-    if (fortificationTokens != 0) parts.add("fortify +" + (fortificationTokens * 2));
+    if (fortifyTokensSpent != 0) parts.add("fortify +" + (fortifyTokensSpent * 2));
     return String.join(", ", parts);
+  }
+
+  private String attackBreakdown(int roll, int heroBonus, int armyBonus, int cardBonus) {
+    List<String> parts = new ArrayList<>();
+    parts.add("d20 " + roll);
+    if (heroBonus != 0) parts.add("hero +" + heroBonus);
+    if (armyBonus != 0) parts.add("army +" + armyBonus);
+    if (cardBonus != 0) parts.add("card +" + cardBonus);
+    return String.join(", ", parts);
+  }
+
+  private int spendAssignedFortifyTokens(
+      PlayerState defender, HexCoordinate target, int requested, int maxAllowed) {
+    if (requested <= 0) return 0;
+    if (requested > maxAllowed) {
+      throw DomainException.of(
+          "FORTIFY_LIMIT_EXCEEDED", "Too many Fortify Tokens for this attack type");
+    }
+    boolean settlementTarget =
+        defender.settlements.stream().anyMatch(settlement -> settlement.location().equals(target));
+    if (!settlementTarget) {
+      throw DomainException.of("FORTIFY_NOT_AVAILABLE", "Fortify Tokens only protect settlements");
+    }
+    String key = hexKey(target);
+    int temporary = defender.temporaryAssignedFortifyTokens.getOrDefault(key, 0);
+    int permanent = defender.assignedFortifyTokens.getOrDefault(key, 0);
+    if (temporary + permanent < requested) {
+      throw DomainException.of("FORTIFY_NOT_AVAILABLE", "Not enough assigned Fortify Tokens");
+    }
+    int fromTemporary = Math.min(temporary, requested);
+    int fromPermanent = requested - fromTemporary;
+    putPositive(defender.temporaryAssignedFortifyTokens, key, temporary - fromTemporary);
+    putPositive(defender.assignedFortifyTokens, key, permanent - fromPermanent);
+    return requested;
+  }
+
+  private void createTributeClaim(
+      GameState g, PlayerState creditor, PlayerState debtor, List<DomainEvent> e) {
+    g.tributeClaims.removeIf(
+        claim ->
+            claim.creditorPlayerId().equals(creditor.id)
+                && claim.debtorPlayerId().equals(debtor.id));
+    TributeClaim claim = new TributeClaim(creditor.id, debtor.id, 1, g.roundNumber + 2);
+    g.tributeClaims.add(claim);
+    e.add(
+        new DomainEvent(
+            "TRIBUTE_CLAIM_CREATED",
+            Map.of(
+                "creditorPlayerId",
+                creditor.id,
+                "debtorPlayerId",
+                debtor.id,
+                "amount",
+                claim.amount(),
+                "expiresAtRound",
+                claim.expiresAtRound())));
+  }
+
+  private void putPositive(Map<String, Integer> map, String key, int value) {
+    if (value <= 0) map.remove(key);
+    else map.put(key, value);
   }
 
   private PlayerState defenderAt(GameState g, PlayerState attacker, HexCoordinate target) {
@@ -1458,7 +1661,7 @@ public final class DefaultGameEngine implements GameEngine {
             .filter(
                 unit ->
                     !unit.id().equals(wounded.id())
-                        || !(unit.wounded() && unit.fatigue() == FatigueState.EXHAUSTED))
+                        || !unit.wounded())
             .map(
                 unit ->
                     unit.id().equals(wounded.id())
@@ -1690,6 +1893,58 @@ public final class DefaultGameEngine implements GameEngine {
                 unitHealed)));
   }
 
+  private void restUnit(GameState g, PlayerState p, GameCommand.RestUnit c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    spendActionPoints(p, 1);
+    boolean found = false;
+    List<UnitState> nextUnits = new ArrayList<>();
+    FatigueResolver fatigue = new FatigueResolver();
+    for (UnitState unit : p.units) {
+      if (!found && unit.id().equals(c.unitId())) {
+        if (unit.fatigue() == FatigueState.READY) {
+          throw DomainException.of("INVALID_TARGET", "Unit is already ready");
+        }
+        nextUnits.add(fatigue.recover(unit));
+        found = true;
+      } else {
+        nextUnits.add(unit);
+      }
+    }
+    if (!found) throw DomainException.of("INVALID_TARGET", "Unknown unit");
+    p.units = nextUnits;
+    e.add(new DomainEvent("UNIT_RESTED", Map.of("playerId", p.id, "unitId", c.unitId())));
+  }
+
+  private void feedTroops(GameState g, PlayerState p, GameCommand.FeedTroops c, List<DomainEvent> e) {
+    requireTurnAction(g, p);
+    if (p.resources.food() < 1) {
+      throw DomainException.of("INSUFFICIENT_RESOURCES", "Feed Troops costs 1 Food");
+    }
+    Set<UUID> requested = c.unitIds() == null ? Set.of() : c.unitIds();
+    if (requested.isEmpty() || requested.size() > 2) {
+      throw DomainException.of("INVALID_PAYLOAD", "Feed Troops recovers one or two units");
+    }
+    boolean canRecover =
+        p.units.stream()
+            .anyMatch(unit -> requested.contains(unit.id()) && unit.fatigue() != FatigueState.READY);
+    if (!canRecover) throw DomainException.of("INVALID_TARGET", "No selected unit can recover");
+    spendActionPoints(p, 1);
+    p.resources = p.resources.add(ResourceType.FOOD, -1);
+    FatigueResolver fatigue = new FatigueResolver();
+    int recovered = 0;
+    List<UnitState> nextUnits = new ArrayList<>();
+    for (UnitState unit : p.units) {
+      if (requested.contains(unit.id()) && unit.fatigue() != FatigueState.READY) {
+        nextUnits.add(fatigue.recover(unit));
+        recovered++;
+      } else {
+        nextUnits.add(unit);
+      }
+    }
+    p.units = nextUnits;
+    e.add(new DomainEvent("TROOPS_FED", Map.of("playerId", p.id, "count", recovered)));
+  }
+
   private void marketDeal(GameState g, PlayerState p, GameCommand.MarketDeal c, List<DomainEvent> e) {
     requireTurnAction(g, p);
     requireHero(p, HeroClass.MERCHANT);
@@ -1736,7 +1991,7 @@ public final class DefaultGameEngine implements GameEngine {
             .map(UnitState::id)
             .collect(java.util.stream.Collectors.toSet());
     if (!ownedUnitIds.containsAll(c.participatingUnitIds())) {
-      throw DomainException.of("UNIT_EXHAUSTED", "Plan contains unavailable units");
+      throw DomainException.of("UNIT_EXHAUSTED_CANNOT_ATTACK", "Exhausted units cannot attack");
     }
     if (c.participatingUnitIds().isEmpty() && !c.heroParticipates()) {
       throw DomainException.of("INVALID_PAYLOAD", "Attack Plan must commit a Hero or units");
@@ -1936,6 +2191,7 @@ public final class DefaultGameEngine implements GameEngine {
       p.previousAction = p.selectedAction;
       p.selectedAction = null;
       p.actionLocked = false;
+      expireTemporaryFortify(p);
       e.add(event("MAIN_ACTION_SKIPPED", "playerId", p.id));
       advancePlayerTurn(g, e);
       return;
@@ -1974,6 +2230,7 @@ public final class DefaultGameEngine implements GameEngine {
     p.previousAction = p.selectedAction;
     p.selectedAction = null;
     p.actionLocked = false;
+    expireTemporaryFortify(p);
     e.add(event(type, "playerId", p.id));
     if (g.hybridTurnMode) {
       p.mainActionCompletedThisRound = true;
@@ -1999,10 +2256,12 @@ public final class DefaultGameEngine implements GameEngine {
   }
 
   private void startPlayerTurn(GameState g, PlayerState p) {
+    expireTemporaryFortify(p);
     p.basicActionPoints = baseActionPoints(g);
     resetTurnDiscounts(p);
     if (p.selectedAction == ActionType.FORTIFY) {
-      p.fortificationTokens += p.hero.heroClass() == HeroClass.ENGINEER ? 3 : 2;
+      p.temporaryFortifyTokens = p.hero.heroClass() == HeroClass.ENGINEER ? 2 : 1;
+      p.freeFortifyAssignmentsRemaining = 2;
     }
   }
 
@@ -2019,6 +2278,13 @@ public final class DefaultGameEngine implements GameEngine {
     p.swiftMoveUsed = false;
     p.quickRoadUsed = false;
     p.repairUsed = false;
+    p.freeFortifyBuyUsed = false;
+  }
+
+  private void expireTemporaryFortify(PlayerState p) {
+    p.temporaryFortifyTokens = 0;
+    p.freeFortifyAssignmentsRemaining = 0;
+    p.temporaryAssignedFortifyTokens.clear();
   }
 
   private List<UUID> actionTurnOrder(GameState g) {
@@ -2094,6 +2360,7 @@ public final class DefaultGameEngine implements GameEngine {
       monsterAttack(g, monster, target, e);
     }
     for (PlayerState p : g.players) {
+      expireTemporaryFortify(p);
       p.basicActionPoints = baseActionPoints(g);
       p.mainActionCompletedThisRound = false;
       p.selectedAction = null;
@@ -2117,6 +2384,7 @@ public final class DefaultGameEngine implements GameEngine {
       p.units =
           p.units.stream().map(u -> u.garrison() ? u : new FatigueResolver().recover(u)).toList();
     }
+    g.tributeClaims.removeIf(claim -> claim.expiresAtRound() < g.roundNumber + 1);
     g.actionTurnOrder.clear();
     g.actionTurnOrderIndex = 0;
     g.roundNumber++;
@@ -2295,7 +2563,6 @@ public final class DefaultGameEngine implements GameEngine {
               + " — " + p.getOrDefault("attackType", "conflict")
               + ", reaction: " + p.getOrDefault("reaction", "NONE")
               + ", attacker d20 " + p.getOrDefault("roll", "?")
-              + ", defender d20 " + p.getOrDefault("defenderRoll", "?")
               + ", attack " + p.getOrDefault("attackTotal", "?")
               + " vs defense " + p.getOrDefault("defenseTotal", "?")
               + ", damage " + p.getOrDefault("damage", 0)
@@ -2306,8 +2573,29 @@ public final class DefaultGameEngine implements GameEngine {
               + ", lost " + p.getOrDefault("resourcesLost", 0)
               + ". Cards revealed: attacker " + p.getOrDefault("attackerCard", "NONE")
               + ", defender " + p.getOrDefault("defenderCard", "NONE")
+              + ". Attack: " + p.getOrDefault("attackerBreakdown", "unknown")
               + ". Defense: " + p.getOrDefault("defenseBreakdown", "unknown")
+              + ". Fortify spent: " + p.getOrDefault("fortifyTokensSpent", 0)
               + ". " + p.getOrDefault("outcome", "");
+      case "FORTIFY_TOKEN_BOUGHT" ->
+          playerName(g, p.get("playerId")) + " bought 1 Fortify Token for "
+              + p.getOrDefault("gold", 2) + " Gold.";
+      case "FORTIFY_TOKEN_ASSIGNED" ->
+          playerName(g, p.get("playerId")) + " assigned "
+              + p.getOrDefault("amount", 1) + " Fortify Token to "
+              + coordText(p.get("target")) + ".";
+      case "TRIBUTE_CLAIM_CREATED" ->
+          playerName(g, p.get("creditorPlayerId")) + " gained a tribute claim against "
+              + playerName(g, p.get("debtorPlayerId")) + ".";
+      case "TRIBUTE_CLAIM_PAID" ->
+          playerName(g, p.get("debtorPlayerId")) + " paid tribute to "
+              + playerName(g, p.get("creditorPlayerId")) + ": "
+              + p.getOrDefault("amount", 1) + " "
+              + title(String.valueOf(p.getOrDefault("resource", "resource"))) + ".";
+      case "UNIT_RESTED" -> playerName(g, p.get("playerId")) + " rested a unit.";
+      case "TROOPS_FED" ->
+          playerName(g, p.get("playerId")) + " fed troops and recovered "
+              + p.getOrDefault("count", 1) + " unit(s).";
       case "HERO_MOVED" -> playerName(g, p.get("playerId")) + " moved their Hero.";
       case "RANGER_SWIFT_MOVE_USED" -> playerName(g, p.get("playerId")) + " used Swift Move.";
       case "ENGINEER_REPAIR_USED" ->
@@ -2330,16 +2618,12 @@ public final class DefaultGameEngine implements GameEngine {
       return "🎲 Roll " + roll + ": no settlements produced resources.";
     }
     Map<String, Map<String, Integer>> byPlayer = new LinkedHashMap<>();
-    Map<String, Set<Integer>> sourceNumbers = new LinkedHashMap<>();
     for (Object entry : entries) {
       if (entry instanceof ProductionResolver.Production item) {
         String name = playerName(g, item.playerId());
         byPlayer
             .computeIfAbsent(name, ignored -> new LinkedHashMap<>())
             .merge(item.resource().name(), item.amount(), Integer::sum);
-        if (item.productionNumber() != 0) {
-          sourceNumbers.computeIfAbsent(name, ignored -> new LinkedHashSet<>()).add(item.productionNumber());
-        }
       }
     }
     if (byPlayer.isEmpty()) return "🎲 Roll " + roll + ": production resolved.";
@@ -2350,21 +2634,10 @@ public final class DefaultGameEngine implements GameEngine {
                     + entry.getValue().entrySet().stream()
                         .map(resource -> resource.getValue() + " " + title(resource.getKey()))
                         .reduce((a, b) -> a + ", " + b)
-                        .orElse("nothing")
-                    + productionSourceNote(roll, sourceNumbers.get(entry.getKey())))
+                        .orElse("nothing"))
             .reduce((a, b) -> a + "; " + b)
             .orElse("production resolved");
     return "🎲 Roll " + roll + ": " + gains + ".";
-  }
-
-  private String productionSourceNote(Object roll, Set<Integer> numbers) {
-    if (numbers == null || numbers.isEmpty()) return "";
-    Set<String> labels =
-        numbers.stream()
-            .map(String::valueOf)
-            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-    if (labels.size() == 1 && labels.contains(String.valueOf(roll))) return "";
-    return " from number " + String.join("/", labels) + " via Beginner mode";
   }
 
   private String playerName(GameState g, Object id) {
@@ -2388,6 +2661,10 @@ public final class DefaultGameEngine implements GameEngine {
   private String coordText(Object value) {
     if (value instanceof HexCoordinate c) return c.q() + "," + c.r();
     return "?";
+  }
+
+  private String hexKey(HexCoordinate coordinate) {
+    return coordinate.q() + "," + coordinate.r();
   }
 
   private String title(String value) {

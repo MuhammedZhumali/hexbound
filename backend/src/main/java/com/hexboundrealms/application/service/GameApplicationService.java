@@ -286,6 +286,22 @@ public class GameApplicationService {
     result.add(action("BUY_MARKET_CARD", "Buy Card", "Buy one visible market card.", p.selectedAction == ActionType.TRADE && !p.freeTradeCardBuyUsed ? 0 : 1,
         Resources.none(), p.basicActionPoints >= (p.selectedAction == ActionType.TRADE && !p.freeTradeCardBuyUsed ? 0 : 1) && !g.market.isEmpty(),
         g.market.isEmpty() ? "No market cards are available." : null, false, TargetType.CARD, List.of()));
+    int fortifyBuyApCost =
+        (p.selectedAction == ActionType.TRADE || p.selectedAction == ActionType.FORTIFY) && !p.freeFortifyBuyUsed
+            ? 0
+            : 1;
+    result.add(action("BUY_FORTIFY_TOKEN", "Buy Fortify Token", "Spend 2 Gold for a settlement defense token.", fortifyBuyApCost,
+        Map.of("gold", 2), p.basicActionPoints >= fortifyBuyApCost && p.resources.gold() >= 2,
+        p.resources.gold() < 2 ? "You need 2 Gold." : p.basicActionPoints < fortifyBuyApCost ? "Not enough AP." : null,
+        false, TargetType.NONE, List.of()));
+    int fortifyAssignApCost =
+        p.selectedAction == ActionType.FORTIFY && p.freeFortifyAssignmentsRemaining > 0 ? 0 : 1;
+    List<String> fortifyTargets = p.settlements.stream().map(SettlementState::location).map(this::hexId).toList();
+    boolean hasFortifyToken = p.fortifyTokenStockpile + p.temporaryFortifyTokens > 0;
+    result.add(action("ASSIGN_FORTIFY_TOKEN", "Assign Fortify", "Attach 1 token to a specific settlement.", fortifyAssignApCost,
+        Resources.none(), p.basicActionPoints >= fortifyAssignApCost && hasFortifyToken && !fortifyTargets.isEmpty(),
+        !hasFortifyToken ? "Buy or gain a Fortify Token first." : apOrTargetReason(p, fortifyAssignApCost, fortifyTargets),
+        true, TargetType.FRIENDLY_HEX, fortifyTargets));
     result.add(action("SMALL_RAID", "Small Raid", "A 1 AP raid against an adjacent enemy or monster.", 1,
         Resources.none(), p.basicActionPoints >= 1 && !attackTargets.isEmpty(),
         apOrTargetReason(p, 1, attackTargets), true, TargetType.ENEMY_HEX, attackTargets));
@@ -296,6 +312,27 @@ public class GameApplicationService {
         p.selectedAction != ActionType.ATTACK ? "Requires ATTACK action card." : apOrTargetReason(p, fullAttackCost, attackTargets),
         true, TargetType.ENEMY_HEX, attackTargets));
     addHeroActions(result, g, p, exploreTargets, friendlyTargets, roadTargets, attackTargets, movementTargets);
+    List<UUID> recoverable = recoverableUnitIds(p);
+    result.add(
+        actionWithUnits(
+            "REST_UNIT",
+            "Rest Unit",
+            "Recover one exhausted/tired unit.",
+            1,
+            Resources.none(),
+            p.basicActionPoints >= 1 && !recoverable.isEmpty(),
+            recoverable.isEmpty() ? "No tired unit." : p.basicActionPoints < 1 ? "Not enough AP." : null,
+            recoverable));
+    result.add(
+        actionWithUnits(
+            "FEED_TROOPS",
+            "Feed Troops",
+            "Spend 1 Food to recover up to two units.",
+            1,
+            new Resources(0, 1, 0, 0, 0),
+            p.basicActionPoints >= 1 && p.resources.food() >= 1 && !recoverable.isEmpty(),
+            p.resources.food() < 1 ? "You need 1 Food." : recoverable.isEmpty() ? "No tired unit." : p.basicActionPoints < 1 ? "Not enough AP." : null,
+            recoverable));
     result.add(action("END_PLAYER_TURN", "End Turn", "Finish your turn now.", 0, Resources.none(),
         true, null, false, TargetType.NONE, List.of()));
     return result;
@@ -473,6 +510,35 @@ public class GameApplicationService {
         List.of());
   }
 
+  private LegalActionDto actionWithUnits(
+      String actionType,
+      String label,
+      String description,
+      int apCost,
+      Resources resourceCost,
+      boolean available,
+      String disabledReason,
+      List<UUID> unitTargets) {
+    return new LegalActionDto(
+        actionType,
+        label,
+        description,
+        apCost,
+        Map.of(
+            "wood", resourceCost.wood(),
+            "food", resourceCost.food(),
+            "ore", resourceCost.ore(),
+            "stone", resourceCost.stone(),
+            "gold", resourceCost.gold()),
+        available,
+        available ? null : disabledReason,
+        false,
+        TargetType.UNIT,
+        List.of(),
+        unitTargets,
+        List.of());
+  }
+
   private String apOrTargetReason(PlayerState p, int cost, List<String> targets) {
     if (p.basicActionPoints < cost) return "You only have " + p.basicActionPoints + " AP remaining.";
     if (targets.isEmpty()) return "No valid target.";
@@ -502,7 +568,6 @@ public class GameApplicationService {
     int range = p.hero.heroClass() == HeroClass.RANGER ? 2 : 1;
     return g.map.stream()
         .filter(h -> p.hero.location().distanceTo(h.coordinate()) <= range)
-        .filter(h -> !p.exploredHexes.contains(h.coordinate()))
         .map(h -> hexId(h.coordinate()))
         .toList();
   }
@@ -554,6 +619,13 @@ public class GameApplicationService {
 
   private boolean hasDamagedFriendly(PlayerState p) {
     return (p.hero != null && p.hero.hp() < 3) || p.units.stream().anyMatch(UnitState::wounded);
+  }
+
+  private List<UUID> recoverableUnitIds(PlayerState p) {
+    return p.units.stream()
+        .filter(unit -> unit.fatigue() != FatigueState.READY)
+        .map(UnitState::id)
+        .toList();
   }
 
   private boolean hasRepairTarget(PlayerState p) {
@@ -622,6 +694,9 @@ public class GameApplicationService {
       case "ROLL_WORLD", "ROLL_WORLD_DICE" ->
           new GameCommand.RollWorld(p.has("forced") ? p.get("forced").asInt() : null);
       case "BUY_MARKET_CARD", "BUY_BONUS_CARD" -> new GameCommand.BuyMarketCard(UUID.fromString(text(p, "cardId")));
+      case "BUY_FORTIFY_TOKEN" -> new GameCommand.BuyFortifyToken();
+      case "ASSIGN_FORTIFY_TOKEN" ->
+          new GameCommand.AssignFortifyToken(coord(p, "target"), p.path("amount").asInt(1));
       case "SELECT_HERO" -> new GameCommand.SelectHero(HeroClass.valueOf(text(p, "heroClass")));
       case "CONFIRM_HERO" -> new GameCommand.ConfirmHero();
       case "CANCEL_HERO_SELECTION" -> new GameCommand.CancelHeroSelection();
@@ -666,7 +741,8 @@ public class GameApplicationService {
               p.hasNonNull("reaction") ? ReactionType.valueOf(text(p, "reaction")) : null);
       case "SMALL_RAID" -> new GameCommand.SmallRaid(coord(p, "target"));
       case "DEFENDER_REACTION", "CHOOSE_DEFENDER_REACTION" ->
-          new GameCommand.DefenderReaction(ReactionType.valueOf(text(p, "reaction")));
+          new GameCommand.DefenderReaction(
+              ReactionType.valueOf(text(p, "reaction")), p.path("fortifyTokensToSpend").asInt(0));
       case "PRIEST_HEAL" -> new GameCommand.PriestHeal(coord(p, "target"));
       case "PRIEST_BLESS" -> new GameCommand.PriestBless(coord(p, "target"));
       case "PRIEST_SANCTUARY" -> new GameCommand.PriestSanctuary(coord(p, "target"));
@@ -679,6 +755,12 @@ public class GameApplicationService {
       case "SCOUT" -> new GameCommand.Scout(coord(p, "target"));
       case "QUICK_ROAD" -> new GameCommand.QuickRoad(coord(p, "from"), coord(p, "to"));
       case "REPAIR" -> new GameCommand.Repair(coord(p, "target"));
+      case "REST_UNIT" -> new GameCommand.RestUnit(UUID.fromString(text(p, "unitId")));
+      case "FEED_TROOPS" ->
+          new GameCommand.FeedTroops(
+              json.convertValue(
+                  p.path("unitIds"),
+                  json.getTypeFactory().constructCollectionType(Set.class, UUID.class)));
       case "LOCK_ATTACK_PLAN" ->
           new GameCommand.LockAttackPlan(
               coord(p, "source"),
